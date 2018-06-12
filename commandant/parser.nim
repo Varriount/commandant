@@ -8,11 +8,11 @@ type
     redirectionNode
 
   AstNode* = object
-    case kind: AstNodeKind
+    case kind*: AstNodeKind
     of commandNode:
-      words: seq[Token]
+      words*: seq[Token]
     else:
-      children: seq[AstNode]
+      children*: seq[AstNode]
     
 
 proc addWord(node: var AstNode, word: Token) =
@@ -111,7 +111,7 @@ proc parseCommand(parser: var Parser): AstNode =
 
 proc parseRedirection(parser: var Parser, currentCommand: AstNode): AstNode =
   result = AstNode(
-    kind: seperatorNode,
+    kind: redirectionNode,
     children: @[]
   )
   result.addChild(parser.token)
