@@ -1,11 +1,11 @@
 import std/strformat
 
 # Handle CTRL-C
-proc handleQuit() {.noconv.}=
-  stdout.write("\n")
-  quit(0)
+# proc handleQuit() {.noconv.}=
+#   stdout.write("\n")
+#   quit(0)
 
-setControlCHook(handleQuit)
+# setControlCHook(handleQuit)
 
 
 # Character and character set constants
@@ -20,15 +20,17 @@ const
 # Token Implementation
 type
   TokenKind* = enum
+    emptyToken
+    errToken
+    eofToken
+
     wordToken
     strToken
-    errToken
-    emptyToken
 
     # Keywords/Symbols
     andSepToken    # '&&'
     orSepToken     # '||'
-    sepToken       # ';'
+    semiSepToken   # ';'
 
     stdoutToken    # '>'
     stdoutAppToken # '>>'
@@ -47,14 +49,23 @@ const
   keywordMap: array[kwMapLength, string] = [
     "&&", # andSepToken
     "||", # orSepToken
-    ";",  # sepToken
+    ";",  # semiSepToken
     ">",  # stdoutToken
     ">>", # stdoutAppToken
     "<"   # stdinToken
   ]
 
+  precMapLow   = ord(andSepToken)
+  precMapHigh  = ord(semiSepToken)
+  precMapLength = precMapHigh - precMapLow + 1
+  precedenceMap: array[precMapLength, int] = [
+    3, # andSepToken
+    2, # orSepToken
+    1, # semiSepToken
+  ]
 
-proc reset*(result: var Token) =
+
+proc initToken*(result: var Token) =
   ## Reset/Reinitialize the contents of the passed in token.
   result.kind = emptyToken
   result.position = 0
@@ -79,47 +90,65 @@ proc add*(token: var Token, s: string) =
   token.data.add(s)
 
 
+proc isLeftAssociative*(token: Token): bool =
+  result = true
+
+
+proc getPrecedence*(token: Token): int =
+  if ord(token.kind) notin precMapLow..precMapHigh:
+    result = -1
+  else:
+    result = precedenceMap[ord(token.kind) - precMapLow]
+
+
 # Lexer implementation
 type Lexer* = object
   buffer*  : string ## Current data being lexed
   position*: int    ## Position that data is being read from.
 
 
-proc reset*(lexer: var Lexer, line = "") =
+proc initLexer*(lexer: var Lexer, line = "") =
   ## Initializes the passed in lexer object.
   lexer.position = 0
   lexer.buffer = line
   lexer.buffer &= '\0' # Added as a signal to the lexing code to stop.
 
 
-template currentChar(lexer: Lexer): untyped =
-  lexer.buffer[lexer.position]
+proc character(lexer: Lexer): char =
+  result = lexer.buffer[lexer.position]
 
 
-template nextChar(lexer: Lexer): untyped =
-  lexer.buffer[lexer.position + 1]
+proc peek(lexer: Lexer): char =
+  result = lexer.buffer[lexer.position + 1]
 
 
-template hasChar(lexer: Lexer): untyped =
-  lexer.currentChar != '\0'
+proc atEnd(lexer: Lexer): bool =
+  result = (lexer.character != '\0')
 
 
-template incPosition(lexer: var Lexer) =
+proc read(lexer: var Lexer): char =
+  inc lexer.position
+  result = lexer.character
+
+
+proc blindRead(lexer: var Lexer) =
   inc lexer.position
 
 
 # Lexing Routines
-proc lexString(lexer: var Lexer, result: var Token) =  
+proc lexString(lexer: var Lexer, result: var Token) =
+  initToken(result)
   result.position = lexer.position
   result.kind = strToken
 
-  incPosition(lexer) # Skip over the initial quote
+  blindRead(lexer) # Skip over initial quote
+
   while true:
-    let character = lexer.currentChar
+    let character = lexer.character
 
     # Handle quotes
     if character == '"':
-      lexer.incPosition
+      blindRead(lexer)
       break
 
     # Handle end-of-input
@@ -133,9 +162,9 @@ proc lexString(lexer: var Lexer, result: var Token) =
 
     #  Handle escapes
     elif character == '\\':
-      if lexer.nextChar in {'\\', '"'}:
-        add(result, lexer.nextChar)
-        incPosition(lexer)
+      if peek(lexer) in {'\\', '"'}:
+        add(result, peek(lexer))
+        blindRead(lexer) # Lexer is at '\' or '"'
       else:
         fillWithError(
           result,
@@ -146,19 +175,19 @@ proc lexString(lexer: var Lexer, result: var Token) =
     else:
       add(result, character)
 
-    incPosition(lexer)
+    blindRead(lexer)
 
 
 proc lexSkip(lexer: var Lexer, result: var Token) =
   while true:
-    case lexer.currentChar
+    case lexer.character
     of spaceChars:
       inc lexer.position
 
     of carriageReturn, lineFeed:
       fillWithError(
         result,
-        fmt"Illegal character '{repr(lexer.currentChar)}' " &
+        fmt"Illegal character '{repr(lexer.character)}' " &
         fmt"at position {lexer.position}"
       )
       break
@@ -172,16 +201,16 @@ proc lexWord(lexer: var Lexer, result: var Token) =
   result.kind = wordToken
 
   while true:
-    let character = lexer.currentChar
+    let character = lexer.character
 
     # Handle spaces/eof
     case character
-    of spaceChars, endOfFile:
+    of spaceChars, endOfFile, lineFeed, carriageReturn:
       break
     else:
       add(result, character)
 
-    incPosition(lexer)
+    blindRead(lexer)
 
 
 proc specializeWord(result: var Token) =
@@ -192,9 +221,10 @@ proc specializeWord(result: var Token) =
 
 
 proc nextToken*(lexer: var Lexer, result: var Token) =
-  reset(result)
+  initToken(result)
 
-  if lexer.currentChar == endOfFile:
+  if lexer.character == endOfFile:
+    result.kind = eofToken
     return
 
   lexSkip(lexer, result)
@@ -202,7 +232,7 @@ proc nextToken*(lexer: var Lexer, result: var Token) =
   if result.kind == errToken:
     return
 
-  if lexer.currentChar == '"':
+  if lexer.character == '"':
     lexString(lexer, result)
   else:
     lexWord(lexer, result)
