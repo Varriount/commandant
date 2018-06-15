@@ -29,7 +29,7 @@ proc addStringRepr(t: Token, indent: Indent, result: var string) =
   addQuoted(quotedData, t.data)
 
   result.add(fmt(
-    "{indent}Token(\n"                   &
+    "Token(\n"                             &
     "{nextIndent}kind:     {t.kind}\n"     &
     "{nextIndent}data:     {quotedData}\n" &
     "{nextIndent}position: {t.position}\n" &
@@ -64,10 +64,12 @@ proc addStringRepr(n: AstNode, indent: Indent, result: var string) =
     result &= itemsEnd
   
   case n.kind
-  of commandNode:
-    processItems("word", n.words)
+  of termNode:
+    result &= fmt"{nextIndent}term: "
+    addStringRepr(n.term, nextIndent, result)
+    result &= "\n"
 
-  of statementNode, seperatorNode, redirectionNode:
+  else:
     processItems("children", n.children)
 
   result &= indent & ")"

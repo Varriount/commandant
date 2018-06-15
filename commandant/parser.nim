@@ -1,39 +1,34 @@
-import lexer
+import lexer, strformat
 
 type
   AstNodeKind* = enum
+    termNode
+    expressionNode
     commandNode
-    statementNode
     seperatorNode
     redirectionNode
 
   AstNode* = object
     case kind*: AstNodeKind
-    of commandNode:
-      words*: seq[Token]
+    of termNode:
+      term*: Token
     else:
       children*: seq[AstNode]
-    
-
-proc addWord(node: var AstNode, word: Token) =
-  node.words.add(word)
 
 
-proc addChild(node: var AstNode, child: AstNode) =
-  node.children.add(child)
+template makeNode(nodeKind: static[AstNodeKind], nodeValue): AstNode =
+  when nodeKind == termNode:
+    AstNode(kind: nodeKind, term: nodeValue)
+  else:
+    AstNode(kind: nodeKind, children: nodeValue)
 
 
-proc addChild(node: var AstNode, word: Token) =
-  node.addChild(
-    AstNode(
-      kind: commandNode,
-      words: @[word]
-    )
-  )
+template addNewNode(parent: AstNode, kind: static[AstNodeKind], value) =
+  parent.children.add(makeNode(kind, value))
 
 
 type
-  Parser* = object
+  Parser* = ref object
     lexer: Lexer
     token: Token
 
@@ -43,84 +38,82 @@ proc initParser*(result: var Parser) =
     lexer: Lexer(),
     token: Token()
   )
-  reset(result.lexer)
-  reset(result.token)
+  initLexer(result.lexer)
+  initToken(result.token)
 
 
-proc nextTokenOpt(parser: var Parser) =
-  parser.lexer.nextToken(parser.token)
+proc readToken(parser: var Parser) =
+  nextToken(parser.lexer, parser.token)
 
 
-proc nextToken(parser: var Parser) =
-  nextTokenOpt(parser)
-  if parser.token.kind == emptyToken:
-    raise newException(ValueError, "Expected one or more tokens.")
+# proc hasToken(parser: var Parser): bool =
+#   result = (parser.token.kind != eofToken)
 
 
-proc handleErrToken(parser: var Parser) =
-  raise newException(ValueError, parser.token.data)
+# proc handleErrToken(parser: var Parser) =
+#   raise newException(ValueError, parser.token.data)
 
 
 # Parsing routines
-proc parseCommand(parser: var Parser): AstNode
-proc parseRedirection(parser: var Parser, currentCommand: AstNode): AstNode
-proc parseSeperator(parser: var Parser, currentCommand: AstNode): AstNode
-
-
-proc parseSeperator(parser: var Parser, currentCommand: AstNode): AstNode =
-  result = AstNode(
-    kind: seperatorNode,
-    children: @[]
-  )
-  result.addChild(parser.token)
-  result.addChild(currentCommand)
-
-  # Ensure that there is at least one token on the other side of the operator.
-  parser.nextToken()
-  result.addChild(parseCommand(parser))
-
-
-proc parseCommand(parser: var Parser, result: var AstNode) =
-  while true:
-    case parser.token.kind
-    of wordToken, strToken:
-      result.addWord(parser.token)
-    of andSepToken, orSepToken, sepToken:
-      result = parseSeperator(parser, result)
-      break
-    of stdoutToken, stdoutAppToken, stdinToken:
-      result = parseRedirection(parser, result)
-      nextTokenOpt(parser)
-      parseCommand(parser, result.children[^1])
-      break
-    of emptyToken:
-      break
-    of errToken:
-      handleErrToken(parser)
-
-    nextTokenOpt(parser)
+# proc parseRedirection(parser: var Parser, currentCommand: AstNode): AstNode =
+#   result = AstNode(
+#     kind: redirectionNode,
+#     children: @[]
+#   )
+#   result.addChild(parser.token)
+#   nextToken(parser)
+#   result.children[0].addTerm(parser.token)
+#   result.addChild(currentCommand)
 
 
 proc parseCommand(parser: var Parser): AstNode =
-  result = AstNode(
-    kind: commandNode,
-    words: @[]
-  )
-  parseCommand(parser, result)
-  
+  result = makeNode(commandNode, @[AstNode(kind: redirectionNode)])
+  while true:
+    case parser.token.kind
+    of wordToken, strToken:
+      result.addNewNode(termNode, parser.token)
+      readToken(parser)
+    of stdoutToken, stdinToken, stdoutAppToken:
+      result.children[0].addNewNode(termNode, parser.token)
+      readToken(parser)
+      result.children[0].addNewNode(termNode, parser.token)
+    else:
+      break
 
-proc parseRedirection(parser: var Parser, currentCommand: AstNode): AstNode =
-  result = AstNode(
-    kind: redirectionNode,
-    children: @[]
-  )
-  result.addChild(parser.token)
-  nextToken(parser)
-  result.children[0].addWord(parser.token)
-  result.addChild(currentCommand)
 
+proc parseExpression(parser: var Parser, precedenceLimit: int): AstNode =
+  result = parseCommand(parser)
+
+  var
+    opToken = parser.token
+    precedence = getPrecedence(opToken)
+
+  while opToken.kind != eofToken and precedence >= precedenceLimit:
+    echo precedence, " : ", precedenceLimit
+    if isLeftAssociative(opToken):
+      inc precedence
+
+    readToken(parser)
+
+    let
+      rightExpression = parseExpression(parser, precedence)
+      leftExpression = result
+
+    result = makeNode(
+      seperatorNode,
+      @[
+        makeNode(termNode, opToken),
+        leftExpression,
+        rightExpression
+      ]
+    )
+
+    opToken = parser.token
+    precedence = getPrecedence(opToken)
+
+      
 
 proc parse*(parser: var Parser, s: string): AstNode =
-  reset(parser.lexer, s)
-  nextTokenOpt(parser)
-  result = parseCommand(parser)
+  initLexer(parser.lexer, s)
+  readToken(parser)
+  result = parseExpression(parser, 0)
