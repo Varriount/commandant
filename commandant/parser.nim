@@ -1,12 +1,14 @@
 import lexer, strformat
 
+
+# AstNode Implementation
 type
   AstNodeKind* = enum
     termNode
     expressionNode
     commandNode
     seperatorNode
-    redirectionNode
+    outputNode
 
   AstNode* = object
     case kind*: AstNodeKind
@@ -21,12 +23,23 @@ template makeNode(nodeKind: static[AstNodeKind], nodeValue): AstNode =
     AstNode(kind: nodeKind, term: nodeValue)
   else:
     AstNode(kind: nodeKind, children: nodeValue)
-
+    
 
 template addNewNode(parent: AstNode, kind: static[AstNodeKind], value) =
   parent.children.add(makeNode(kind, value))
 
 
+template add(parent: AstNode, child: AstNode) =
+  parent.children.add(child)
+
+
+# Node Creation Procs
+proc makeTermNode(nodeValue: string|Token): AstNode =
+  when nodeValue is string:
+    makeNode(termNode, Token(kind: strToken, data: nodeValue, position: 0))
+  else:
+    makeNode(termNode, nodeValue)
+# Parser Implementation
 type
   Parser* = ref object
     lexer: Lexer
@@ -67,18 +80,29 @@ proc readToken(parser: var Parser) =
 
 
 proc parseCommand(parser: var Parser): AstNode =
-  result = makeNode(commandNode, @[AstNode(kind: redirectionNode)])
+  result = makeNode(
+    commandNode,
+    @[
+      makeNode(outputNode, @[])
+    ]
+  )
   while true:
     case parser.token.kind
     of wordToken, strToken:
       result.addNewNode(termNode, parser.token)
+
+    of streamOptSet:
+      var streamOptNode = makeNode(commandNode, @[])
+      streamOptNode.addNewNode(termNode, parser.token)
       readToken(parser)
-    of stdoutToken, stdinToken, stdoutAppToken:
-      result.children[0].addNewNode(termNode, parser.token)
-      readToken(parser)
-      result.children[0].addNewNode(termNode, parser.token)
+      streamOptNode.addNewNode(termNode, parser.token)
+      result.children[0].add(streamOptNode)
+
     else:
+      readToken(parser)
       break
+
+    readToken(parser)
 
 
 proc parseExpression(parser: var Parser, precedenceLimit: int): AstNode =
