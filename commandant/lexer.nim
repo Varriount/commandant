@@ -1,12 +1,5 @@
 import std/strformat
 
-# Handle CTRL-C
-# proc handleQuit() {.noconv.}=
-#   stdout.write("\n")
-#   quit(0)
-
-# setControlCHook(handleQuit)
-
 
 # Character and character set constants
 const
@@ -28,13 +21,15 @@ type
     strToken
 
     # Keywords/Symbols
-    andSepToken    # '&&'
+    andSepToken    # '&&'  SEPERATOR LOW, KEYWORD LOW
     orSepToken     # '||'
-    semiSepToken   # ';'
+    semiSepToken   # ';'   SEPERATOR HIGH
 
-    stdoutToken    # '>'
-    stdoutAppToken # '>>'
-    stdinToken     # '<'
+    stdoutToken    # '>'   STREAMOPT LOW
+    stdoutAppToken # '>>' 
+    stderrToken    # '!>'
+    stderrAppToken # '!>>'
+    stdinToken     # '<'   STREAMOPT HIGH, KEYWORD HIGH
 
   Token* = object
     kind*     : TokenKind  ## The type of the token
@@ -47,13 +42,19 @@ const
   kwMapHigh  = ord(stdinToken)
   kwMapLength = kwMapHigh - kwMapLow + 1
   keywordMap: array[kwMapLength, string] = [
-    "&&", # andSepToken
-    "||", # orSepToken
-    ";",  # semiSepToken
-    ">",  # stdoutToken
-    ">>", # stdoutAppToken
-    "<"   # stdinToken
+    "&&",  # andSepToken
+    "||",  # orSepToken
+    ";",   # semiSepToken
+    ">",   # stdoutToken
+    ">>",  # stdoutAppToken
+    "!>",  # stdoutToken
+    "!>>", # stdoutAppToken
+    "<"    # stdinToken
   ]
+
+  streamOptSet* = {stdoutToken..stdinToken}
+  streamOptLow = ord(stdoutToken)
+  streamOptHigh = ord(stdinToken)
 
   precMapLow   = ord(andSepToken)
   precMapHigh  = ord(semiSepToken)
