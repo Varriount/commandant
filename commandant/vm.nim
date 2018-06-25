@@ -1,4 +1,4 @@
-import tables, regex, osproc, os, strformat
+import tables, regex, osproc, os, strformat, sequtils
 import lexer, parser, treeutils
 
 const varRegex = toPattern(r"\$\(([^ \\t]+)\)")
@@ -36,38 +36,49 @@ proc newCommandantVm*(): CommandantVm =
 
 
 # ## Execution Procedures ## #
+proc execCommandNode(vm: CommandantVm, node: AstNode)
+proc execSeperatorNode(vm: CommandantVm, node: AstNode)
 proc execNode*(vm: CommandantVm, node: AstNode)
-
-
-proc extractCommand(node: AstNode): seq[string] =
-  result = @[]
-  for child in node.children[1..^1]:
-    result.add(child.term.data)
 
 
 proc execCommandNode(vm: CommandantVm, node: AstNode) =
   echo "In execCommandNode:"
   echo nodeRepr(node, 1)
   
-  if len(node.children) < 2:
-    raise newException(ValueError, "Invalid command node.")
+  # Sanity check
+  assert(len(node.children) >= 2)
+  assert(node.kind == commandNode)
 
-  let commandParts = extractCommand(node)
+  # Build command string
+  let commandParts = toSeq(node.termsData)
 
+  # Resolve executable location
+  var
+    executable = commandParts[0]
+    arguments = commandParts[1..^1]
 
-  let
-    args = commandParts[1..^1]
-    executable = 
-      if existsFile(commandParts[0]) or existsDir(commandParts[0]):
-        commandParts[0]
-      else:
-        findExe(commandParts[0])
+  if existsFile(executable):
+    discard
+  elif existsDir(executable):
+    echo fmt"'{executable}' is a directory."
+    vm.lastExitCode = "1"
+    return
+  # elif isBuiltin(executable):
+  #   discard
+  else:
+    let resolved = findExe(executable)
+    if resolved == "":
+      echo fmt"Cannot find command/executable '{executable}'."
+      vm.lastExitCode = "1"
+      return
+    else:
+      executable = resolved
 
-  echo fmt"Executing '{executable}' with {args}"
-
+  # Start subprocess
+  echo fmt"Executing '{executable}' with {arguments}"
   let subprocess = startProcess(
     command = executable,
-    args = args,
+    args = arguments,
     options = {poStdErrToStdOut, poParentStreams}
   )
 

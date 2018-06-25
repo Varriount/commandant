@@ -1,7 +1,6 @@
 import commandant/[parser, lexer, treeutils, vm]
-import strformat
-import strutils
-
+import strformat, strutils
+import rdstdin
 
 when defined(release):
   # Handle CTRL-C
@@ -19,12 +18,27 @@ proc main() =
 
   initParser(parser)
 
+  var line = ""
   while true:
     # Print the prompt, then gather the AST from the parser
-    stdout.write("> ")
-    
-    var nodes = parse(parser, readLine(stdin))
-    echo nodeRepr(nodes)
+    let breakLoop = not readLineFromStdin("> ", line)
+    if breakLoop:
+      break
+
+    # Strip whitespace
+    line = line.strip()
+    if line == "":
+      continue
+
+    # Parse the line
+    var nodes = parse(parser, line)
+    if parser.errorFound:
+      parser.errorFound = false
+      continue
+
+    # Execute the line if no error was encountered during the parse.
+    # echo nodeRepr(nodes)
     vm.execNode(nodes)
+      
 
 main()
