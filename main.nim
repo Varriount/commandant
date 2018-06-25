@@ -1,4 +1,4 @@
-import commandant/[parser, lexer, treeutils]
+import commandant/[parser, lexer, treeutils, vm]
 import strformat
 import strutils
 
@@ -13,7 +13,10 @@ when defined(release):
 
 
 proc main() =
-  var parser: Parser
+  var
+    parser: Parser
+    vm = newCommandantVm()
+
   initParser(parser)
 
   while true:
@@ -21,6 +24,7 @@ proc main() =
     stdout.write("> ")
     
     var nodes = parse(parser, readLine(stdin))
-    echo stringRepr(nodes)
+    echo nodeRepr(nodes)
+    vm.execNode(nodes)
 
 main()
