@@ -94,12 +94,12 @@ proc parseCommand(parser: var Parser): AstNode =
     of streamOptSet:
       var streamOptNode = makeNode(commandNode, @[])
       streamOptNode.addNewNode(termNode, parser.token)
+
       readToken(parser)
       streamOptNode.addNewNode(termNode, parser.token)
       result.children[0].add(streamOptNode)
 
     else:
-      readToken(parser)
       break
 
     readToken(parser)

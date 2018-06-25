@@ -1,4 +1,5 @@
-import lexer, parser, strformat
+import lexer, parser
+import strformat, strutils
 
 const
   newLine = "\n"
@@ -14,7 +15,7 @@ proc `+`(i: Indent, n: int): Indent =
     result &= reprIndent
 
 
-proc addStringRepr(term: Token, indent: Indent, result: var string) =
+proc addnodeRepr(term: Token, indent: Indent, result: var string) =
   let nextIndent = indent + 1
 
   var quotedData = ""
@@ -28,20 +29,20 @@ proc addStringRepr(term: Token, indent: Indent, result: var string) =
   ))
 
 
-proc addStringRepr(n: AstNode, indent: Indent, result: var string) =
+proc addnodeRepr(n: AstNode, indent: Indent, result: var string) =
   let nextIndent = indent + 1
 
   result.add(fmt("{indent}{n.kind}:\n"))
 
   case n.kind
   of termNode:
-    addStringRepr(n.term, nextIndent, result)
+    addnodeRepr(n.term, nextIndent, result)
 
   else:
     for child in n.children:
-      addStringRepr(child, nextIndent, result)
+      addnodeRepr(child, nextIndent, result)
 
 
-proc stringRepr*(n: AstNode): string =
-  result = ""
-  addStringRepr(n, Indent(""), result)
+proc nodeRepr*(n: AstNode, indentLevel = 0): string =
+  let startIndent = repeat(reprIndent, indentLevel)
+  addnodeRepr(n, startIndent, result)
