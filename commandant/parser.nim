@@ -1,9 +1,10 @@
 import lexer, strformat
 
 
-# AstNode Implementation
+# ## AstNode Implementation ## #
 type
   AstNodeKind* = enum
+    emptyNode
     termNode
     expressionNode
     commandNode
@@ -33,23 +34,38 @@ template add(parent: AstNode, child: AstNode) =
   parent.children.add(child)
 
 
-# Node Creation Procs
+iterator terms*(node: AstNode): Token =
+  assert node.kind == commandNode
+  for i in 1..high(node.children):
+    yield node.children[i].term
+
+
+iterator termsData*(node: AstNode): string =
+  assert node.kind == commandNode
+  for term in node.terms:
+    yield term.data
+
+
 proc makeTermNode(nodeValue: string|Token): AstNode =
   when nodeValue is string:
     makeNode(termNode, Token(kind: strToken, data: nodeValue, position: 0))
   else:
     makeNode(termNode, nodeValue)
-# Parser Implementation
+
+
+# ## Parser Implementation ## #
 type
   Parser* = ref object
-    lexer: Lexer
-    token: Token
+    lexer*: Lexer
+    token*: Token
+    errorFound*: bool
 
 
 proc initParser*(result: var Parser) =
   result = Parser(
     lexer: Lexer(),
-    token: Token()
+    token: Token(),
+    errorFound: false
   )
   initLexer(result.lexer)
   initToken(result.token)
@@ -59,26 +75,12 @@ proc readToken(parser: var Parser) =
   nextToken(parser.lexer, parser.token)
 
 
-# proc hasToken(parser: var Parser): bool =
-#   result = (parser.token.kind != eofToken)
+proc reportError(parser: var Parser, msg: string) =
+  echo fmt"Error (Column {parser.lexer.position}): ", msg
+  parser.errorFound = true
 
 
-# proc handleErrToken(parser: var Parser) =
-#   raise newException(ValueError, parser.token.data)
-
-
-# Parsing routines
-# proc parseRedirection(parser: var Parser, currentCommand: AstNode): AstNode =
-#   result = AstNode(
-#     kind: redirectionNode,
-#     children: @[]
-#   )
-#   result.addChild(parser.token)
-#   nextToken(parser)
-#   result.children[0].addTerm(parser.token)
-#   result.addChild(currentCommand)
-
-
+# ## Core Parsing routines ## #
 proc parseCommand(parser: var Parser): AstNode =
   result = makeNode(
     commandNode,
@@ -103,6 +105,9 @@ proc parseCommand(parser: var Parser): AstNode =
       break
 
     readToken(parser)
+
+  if len(result.children) < 2:
+    parser.reportError("Command expected.")
 
 
 proc parseExpression(parser: var Parser, precedenceLimit: int): AstNode =
@@ -135,9 +140,10 @@ proc parseExpression(parser: var Parser, precedenceLimit: int): AstNode =
     opToken = parser.token
     precedence = getPrecedence(opToken)
 
-      
 
 proc parse*(parser: var Parser, s: string): AstNode =
+  result = AstNode(kind: emptyNode)
+
   initLexer(parser.lexer, s)
   readToken(parser)
   result = parseExpression(parser, 0)
