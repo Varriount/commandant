@@ -23,6 +23,7 @@ proc main() =
     # Print the prompt, then gather the AST from the parser
     let breakLoop = not readLineFromStdin("> ", line)
     if breakLoop:
+      echo "Unable to read from stdin"
       break
 
     # Strip whitespace

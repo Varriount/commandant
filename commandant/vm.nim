@@ -6,13 +6,20 @@ import lexer, parser, treeutils
 when defined(windows):
   proc c_fileno(f: FileHandle): cint {.
       importc: "_fileno", header: "<stdio.h>".}
-  proc fdopen(f: FileHandle, mode: cstring): File {.
-      importc: "_fdopen", header: "<stdio.h>".}
 else:
   proc c_fileno(f: File): cint {.
       importc: "fileno", header: "<fcntl.h>".}
-  proc fdopen(f: FileHandle, mode: cstring): File {.
-      importc: "fdopen", header: "<fcntl.h>".}
+
+
+proc dup_fd(oldHandle, newHandle: FileHandle) =
+  if dup2(oldHandle, newHandle) < 0:
+    raise newException(ValueError, fmt"Unable to duplicate file handle {oldHandle}.")
+
+
+proc dup_fd(oldHandle: FileHandle): FileHandle =
+  result = dup(oldHandle)
+  if result < 0:
+    raise newException(ValueError, fmt"Unable to duplicate file handle {oldHandle}.")
 
 
 # Constants
@@ -31,9 +38,9 @@ proc newCommandantVm*(): CommandantVm =
   result.variables = initTable[string, seq[AstNode]]()
 
 
-# ## Files Redirection Utility Procedures ## #
-type CommandFiles = object
-  output, errput, input: File
+# ## File Redirection Procedures ## #
+type CommandFiles* = object
+  output*, errput*, input*: File
 
 
 proc filteredClose(file: File) =
@@ -65,7 +72,7 @@ proc openFileToken(fileToken: Token, mode: FileMode): File =
     raise newException(ValueError, "openFile: Invalid file token.")
 
 
-proc getCmdFiles*(node: AstNode): CommandFiles =
+proc getCommandFiles*(node: AstNode): CommandFiles =
   assert node.kind == outputNode
 
   result.output = stdout
@@ -115,22 +122,11 @@ proc tryCallBuiltin(
   result = false
 
 
-proc dup_fd(oldHandle, newHandle: FileHandle) =
-  if dup2(oldHandle, newHandle) < 0:
-    raise newException(ValueError, fmt"Unable to duplicate file handle {oldHandle}.")
-
-
-proc dup_fd(oldHandle: FileHandle): FileHandle =
-  result = dup(oldHandle)
-  if result < 0:
-    raise newException(ValueError, fmt"Unable to duplicate file handle {oldHandle}.")
-
-
 proc tryCallExecutable(
     vm           : CommandantVm,
     unresolvedExe: string,
     arguments    : seq[string],
-    cmdFiles      : CommandFiles): bool =
+    cmdFiles     : CommandFiles): bool =
   # Resolve the executable location
   let resolvedExe = findExe(unresolvedExe)
   if resolvedExe == "":
@@ -191,7 +187,7 @@ proc execCommandNode(vm: CommandantVm, node: AstNode) =
   assert node.kind == commandNode
 
   # Handle command redirection
-  let stdFiles = getCmdFiles(node.children[0])
+  let stdFiles = getCommandFiles(node.children[0])
   defer:
     filteredClose(stdFiles.output)
     filteredClose(stdFiles.errput)
