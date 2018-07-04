@@ -1,18 +1,7 @@
 import tables, regex, osproc, os, strformat, sequtils, streams, posix
-import lexer, parser, treeutils
+import lexer, parser, subprocess, treeutils
 
 
-# Low-level Constants/Procedures
-when defined(windows):
-  proc c_fileno(f: FileHandle): cint {.
-      importc: "_fileno", header: "<stdio.h>".}
-  proc fdopen(f: FileHandle, mode: cstring): File {.
-      importc: "_fdopen", header: "<stdio.h>".}
-else:
-  proc c_fileno(f: File): cint {.
-      importc: "fileno", header: "<fcntl.h>".}
-  proc fdopen(f: FileHandle, mode: cstring): File {.
-      importc: "fdopen", header: "<fcntl.h>".}
 
 
 # Constants
@@ -20,7 +9,7 @@ const varRegex = toPattern(r"\$\(([^ \\t]+)\)")
 
 
 type
-  VariableFrame* = Table[string, seq[AstNode]]
+  VariableFrame* = Table[string, seq[string]]
   CommandantVm* = ref object
     variables*: VariableFrame
     lastExitCode*: string
@@ -28,22 +17,64 @@ type
 
 proc newCommandantVm*(): CommandantVm =
   new(result)
-  result.variables = initTable[string, seq[AstNode]]()
+  result.variables = initTable[string, seq[string]]()
 
 
-# ## Files Redirection Utility Procedures ## #
-type CommandFiles = object
-  output, errput, input: File
+# ## Execution Procedures ## #
+# Include the modules containing code for executing builtins
+include builtins
+proc execCommandNode(vm: CommandantVm, node: AstNode)
+proc execSeperatorNode(vm: CommandantVm, node: AstNode)
+proc execNode*(vm: CommandantVm, node: AstNode)
 
 
-proc filteredClose(file: File) =
-  let core = (
-    file == stdin or
-    file == stdout or
-    file == stderr
+# ### Command Execution ### #
+proc tryCallBuiltin(
+    vm        : CommandantVm,
+    executable: string,
+    arguments : seq[string],
+    cmdFiles   : CommandFiles): bool =
+  let builtin = findBuiltin(executable)
+  if builtin == biUnknown:
+    return false
+
+  result = true
+  callBuiltin(
+    vm        = vm,
+    builtin   = builtin,
+    arguments = arguments,
+    cmdFiles  = cmdFiles,
   )
-  if not core:
-    close(file)
+
+
+proc tryCallExecutable(
+    vm        : CommandantVm,
+    executable: string,
+    arguments : seq[string],
+    cmdFiles   : CommandFiles): bool =
+  let resolvedExe = findExe(executable)
+  if resolvedExe == "":
+    return false
+
+  result = true
+  let process = callExecutable(
+    executable = resolvedExe,
+    arguments  = arguments,
+    cmdFiles   = cmdFiles
+  )
+
+
+proc handleInvalidCommand(
+    vm        : CommandantVm,
+    executable: string,
+    arguments : seq[string],
+    files   : CommandFiles) =
+  vm.lastExitCode = "1"
+
+  if existsDir(executable):
+      echo fmt"'{executable}' is a directory."
+  else:
+    echo fmt"Cannot find command/executable '{executable}'."
 
 
 proc openFileToken(fileToken: Token, mode: FileMode): File =
@@ -65,7 +96,7 @@ proc openFileToken(fileToken: Token, mode: FileMode): File =
     raise newException(ValueError, "openFile: Invalid file token.")
 
 
-proc getCmdFiles*(node: AstNode): CommandFiles =
+proc getCommandFiles*(node: AstNode): CommandFiles =
   assert node.kind == outputNode
 
   result.output = stdout
@@ -101,87 +132,6 @@ proc getCmdFiles*(node: AstNode): CommandFiles =
       raise newException(ValueError, "Unexpected output token.")
 
 
-# ## Execution Procedures ## #
-proc execCommandNode(vm: CommandantVm, node: AstNode)
-proc execSeperatorNode(vm: CommandantVm, node: AstNode)
-proc execNode*(vm: CommandantVm, node: AstNode)
-
-
-proc tryCallBuiltin(
-    vm        : CommandantVm,
-    executable: string,
-    arguments : seq[string],
-    cmdFiles   : CommandFiles): bool =
-  result = false
-
-
-proc dup_fd(oldHandle, newHandle: FileHandle) =
-  if dup2(oldHandle, newHandle) < 0:
-    raise newException(ValueError, fmt"Unable to duplicate file handle {oldHandle}.")
-
-
-proc dup_fd(oldHandle: FileHandle): FileHandle =
-  result = dup(oldHandle)
-  if result < 0:
-    raise newException(ValueError, fmt"Unable to duplicate file handle {oldHandle}.")
-
-
-proc tryCallExecutable(
-    vm           : CommandantVm,
-    unresolvedExe: string,
-    arguments    : seq[string],
-    cmdFiles      : CommandFiles): bool =
-  # Resolve the executable location
-  let resolvedExe = findExe(unresolvedExe)
-  if resolvedExe == "":
-    return false
-
-  # Start the subprocess
-  echo fmt"Starting process {unresolvedExe} with paramters {arguments}"
-
-  # Save cmdFiles
-  let
-    savedStdout = dup_fd(STDOUT_FILENO)
-    savedStderr = dup_fd(STDERR_FILENO)
-    savedStdin = dup_fd(STDIN_FILENO)
-
-  # Restore cmdFiles at the end of the function
-  defer:
-    dup_fd(savedStdout, STDOUT_FILENO);
-    dup_fd(savedStderr, STDERR_FILENO);
-    dup_fd(savedStdin, STDIN_FILENO);
-    discard close(savedStdout)
-    discard close(savedStderr)
-    discard close(savedStdin)
-
-  # Set the cmdFiles
-  dup_fd(c_fileno(cmdFiles.output), STDOUT_FILENO)
-  dup_fd(c_fileno(cmdFiles.errput), STDERR_FILENO)
-  dup_fd(c_fileno(cmdFiles.input), STDIN_FILENO)
-
-  let subprocess = startProcess(
-    command = resolvedExe,
-    args    = arguments,
-    options = {poParentStreams}
-  )
-
-  vm.lastExitCode = $waitForExit(subprocess)
-  result = true
-
-
-proc handleInvalidCommand(
-    vm        : CommandantVm,
-    executable: string,
-    arguments : seq[string],
-    files   : CommandFiles) =
-  vm.lastExitCode = "1"
-
-  if existsDir(executable):
-      echo fmt"'{executable}' is a directory."
-  else:
-    echo fmt"Cannot find command/executable '{executable}'."
-
-
 proc execCommandNode(vm: CommandantVm, node: AstNode) =
   # echo "In execCommandNode:"
   # echo nodeRepr(node, 1)
@@ -191,11 +141,9 @@ proc execCommandNode(vm: CommandantVm, node: AstNode) =
   assert node.kind == commandNode
 
   # Handle command redirection
-  let stdFiles = getCmdFiles(node.children[0])
+  let cmdFiles = getCommandFiles(node.children[0])
   defer:
-    filteredClose(stdFiles.output)
-    filteredClose(stdFiles.errput)
-    filteredClose(stdFiles.input)
+    close(cmdFiles)
 
   # Build command string
   let
@@ -205,16 +153,17 @@ proc execCommandNode(vm: CommandantVm, node: AstNode) =
 
   # Call builtin or command
   let validCommand = (
-    tryCallBuiltin(vm, executable, arguments, stdFiles) or
-    tryCallExecutable(vm, executable, arguments, stdFiles) 
+    tryCallBuiltin(vm, executable, arguments, cmdFiles) or
+    tryCallExecutable(vm, executable, arguments, cmdFiles) 
   )
 
   # Handle invalid command
   if not validCommand:
     vm.lastExitCode = "1"
-    handleInvalidCommand(vm, executable, arguments, stdFiles)
+    handleInvalidCommand(vm, executable, arguments, cmdFiles)
 
 
+# ## Seperator Execution ## #
 proc execSeperatorNode(vm: CommandantVm, node: AstNode) =
   # echo "In execSeperatorNode:"
   # echo nodeRepr(node, 1)
@@ -235,6 +184,7 @@ proc execSeperatorNode(vm: CommandantVm, node: AstNode) =
     raise newException(ValueError, "Unexpected node")
 
 
+# ## Root Execution ## #
 proc execNode*(vm: CommandantVm, node: AstNode) =
   echo "In execNode:"
   echo nodeRepr(node, 1)
