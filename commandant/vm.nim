@@ -9,15 +9,18 @@ const varRegex = toPattern(r"\$\(([^ \\t]+)\)")
 
 
 type
-  VariableFrame* = Table[string, seq[string]]
+  VariableMap* = Table[string, seq[string]]
+  FunctionMap* = Table[string, seq[string]]
   CommandantVm* = ref object
-    variables*: VariableFrame
+    variables*: VariableMap
+    functions*: FunctionMap
     lastExitCode*: string
 
 
 proc newCommandantVm*(): CommandantVm =
   new(result)
   result.variables = initTable[string, seq[string]]()
+  result.functions = initTable[string, seq[string]]()
 
 
 # ## Execution Procedures ## #
@@ -34,17 +37,16 @@ proc tryCallBuiltin(
     executable: string,
     arguments : seq[string],
     cmdFiles   : CommandFiles): bool =
-  let builtin = findBuiltin(executable)
-  if builtin == biUnknown:
-    return false
+  let builtin = getBuiltin(executable)
+  result = isSome(builtin)
 
-  result = true
-  callBuiltin(
-    vm        = vm,
-    builtin   = builtin,
-    arguments = arguments,
-    cmdFiles  = cmdFiles,
-  )
+  if result:
+    vm.lastExitCode = $get(builtin)(
+      vm         = vm, 
+      executable = executable, 
+      arguments  = arguments, 
+      cmdFiles   = cmdFiles,
+    )
 
 
 proc tryCallExecutable(

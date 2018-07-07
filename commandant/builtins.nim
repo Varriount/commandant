@@ -1,46 +1,10 @@
-import parser, lexer, tables, strutils, strformat
-
-#[
-Planned Commands
-  Set a variable:
-    set <x> = <y> ... <z> 
-
-  Unset a variable:
-    unset <x> ... <z>
-
-  Echo a variable:
-    echo <x> ... <z>
-
-  Export a variable:
-    export x [ = <y> ... <z> ]
-
-  Unexport a variable:
-    unexport x
-
-  Print VM state:
-    state <category> ...
-
-]#
-
-type BuiltinIdent = enum
-  biUnknown
-  biEcho
-  biSet
-  biUnset
-  biExport
-  biUnexport
-  biState
-
-
-const builtinMap: array[BuiltinIdent, string] = [
-    "",         # biUnknown
-    "echo",     # biEcho
-    "set",      # biSet
-    "unset",    # biUnset
-    "export",   # biExport
-    "unexport", # biUnexport
-    "state", # biUnexport
-  ]
+## builtins.nim - Implements shell builtins.
+## 
+## Note that this file is *included* in vm.nim due to
+## a circular dependancy between the virtual machine type
+## and the builtin routines.
+## 
+import parser, lexer, tables, strutils, strformat, options
 
 
 # ## Builtin Implementations ## #
@@ -59,66 +23,95 @@ template writeOutLn(outputString) =
   cmdFiles.output.write("\n")
 
 
+template writeErr(errorString) =
+  cmdFiles.errput.write(errorString)
+
+
+template writeErrLn(errorString) =
+  cmdFiles.errput.write(errorString)
+  cmdFiles.errput.write("\n")
+
+
 template emitErrorIf(condition, errorString) =
   if condition:
     cmdFiles.errput.write(errorString)
     return 1
 
 
+template addFmt(s: var string, value: static[string]) =
+  s.add(fmt(value))
+
+
 proc execEcho(
     vm        : CommandantVm,
+    executable: string,
     arguments : seq[string],
     cmdFiles  : CommandFiles): int =
+  ## Echo a variable.
+  ## Syntax:
+  ##   set <x> = <y> ... <z>
+  result = 0
 
   for i in 0..high(arguments):
-    cmdFiles.output.write(arguments[0])
+    writeOut(arguments[i])
     break
 
   for i in 1..high(arguments):
-    cmdFiles.output.write(' ')
-    cmdFiles.output.write(arguments[0])
+    writeOut(' ')
+    writeOut(arguments[i])
+  writeOut("\n")
 
   result = 0
 
 
 proc execSet(
     vm        : CommandantVm,
+    executable: string,
     arguments : seq[string],
     cmdFiles  : CommandFiles): int =
+  ## Set a variable.
+  ## Syntax:
+  ##  echo <x> ... <z>
+  result = 0
 
-  # Check that the number of words is correct
   let valid = (
     len(arguments) >= 3 and
-    arguments[1] == "=" and
-    validIdentifier(arguments[0])
+    arguments[1] == "="
   )
   emitErrorIf(not valid):
     "Error: Expected an expression of the form '<x> = <y> [... <z>]'."
 
-  # Set the variable
   let 
     target = arguments[0]
     values = arguments[2..^1]
+
+  emitErrorIf(not validIdentifier(target)):
+    fmt("Error: \"{target}\" is not a valid identifier.")
 
   vm.variables[target] = values
 
 
 proc execUnset(
-    vm        : CommandantVm,
+    vm        : CommandantVm, 
+    executable: string,
     arguments : seq[string],
     cmdFiles  : CommandFiles): int =
+  ## Unset a variable.
+  ## Syntax:
+  ##   unset <x> ... <z>
+  result = 0
 
   emitErrorIf(len(arguments) > 0):
     "Error: Expected an expression of the form '<x> [<y> ... <z>]'."
 
+  var errored = true
   for arg in arguments:
-    # Check that it's a valid identifier
-    emitErrorIf(not validIdentifier(arg)):
-      fmt"Error: {arg} is not a valid variable name."
+    if not validIdentifier(arg):
+      writeErr("Error: {arg} is not a valid variable name.\n")
+      errored = false
 
-    # Check that the variable exists
-    emitErrorIf(arg notin vm.variables):
-      fmt"Error: {arg} is not a set variable."
+  if errored:
+    return 1
 
   for arg in arguments:
     del(vm.variables, arg)
@@ -126,22 +119,39 @@ proc execUnset(
 
 proc execExport(
     vm        : CommandantVm,
+    executable: string,
     arguments : seq[string],
     cmdFiles  : CommandFiles): int =
+  ## Export a variable.
+  ## Syntax:
+  ##   export x [ = <y> ... <z> ]
+  result = 0
   discard
 
 
 proc execUnexport(
-    vm           : CommandantVm,
-    arguments    : seq[string],
-    cmdFiles     : CommandFiles): int =
+    vm        : CommandantVm,
+    executable: string,
+    arguments : seq[string],
+    cmdFiles  : CommandFiles): int =
+  ## Unexport a variable.
+  ## Syntax:
+  ##   unexport x
+  result = 0
+
   discard
 
 
 proc execState(
-    vm           : CommandantVm,
-    arguments    : seq[string],
-    cmdFiles     : CommandFiles): int =
+    vm        : CommandantVm,
+    executable: string,
+    arguments : seq[string],
+    cmdFiles  : CommandFiles): int =
+  ## Print VM state.
+  ## Syntax:
+  ##   state <category> ...
+  result = 0
+
   const
     listStart = "["
     listEnd   = "]"
@@ -164,30 +174,47 @@ proc execState(
 
 
 # ## Public Interface ## #
-proc findBuiltin(name: string): BuiltinIdent =
-  for ident, identName in builtinMap:
-    echo fmt"Input: {name}, Kind: {ident}, Against: {identName}"
-    if name == identName:
-      return ident
-  return biUnknown
-
-
-proc callBuiltin*(
+type Builtin = proc (
     vm        : CommandantVm,
-    builtin   : BuiltinIdent,
+    executable: string,
     arguments : seq[string],
-    cmdFiles  : CommandFiles) =
+    cmdFiles  : CommandFiles
+  ): int
 
-  template execBuiltin(procname: untyped) =
-    vm.lastExitCode = $procname(vm, arguments, cmdFiles)
 
-  case builtin
-  of biEcho    : execBuiltin(execEcho)
-  of biSet     : execBuiltin(execSet)
-  of biUnset   : execBuiltin(execUnset)
-  of biExport  : execBuiltin(execExport)
-  of biState   : execBuiltin(execState)
-  of biUnexport: execBuiltin(execUnexport)
-  of biUnknown:
-    raise newException(ValueError, "Unknown builtin called.")
+const builtinMap = {
+  "echo"    : execEcho,
+  "set"     : execSet,
+  "unset"   : execUnset,
+  "export"  : execExport,
+  "unexport": execUnexport,
+  "state"   : execState,
+}
+
+
+proc getBuiltin(name: string): Option[Builtin] =
+  for pair in builtinMap:
+    let (builtin_name, builtin) = pair
+    if name == builtin_name:
+      return some(Builtin(builtin))
+
+
+# proc callBuiltin*(
+#     vm        : CommandantVm,
+#     builtin   : BuiltinIdent,
+#     arguments : seq[string],
+#     cmdFiles  : CommandFiles) =
+
+#   template execBuiltin(procname: untyped) =
+#     vm.lastExitCode = $procname(vm, arguments, cmdFiles)
+
+#   case builtin
+#   of biEcho    : execBuiltin(execEcho)
+#   of biSet     : execBuiltin(execSet)
+#   of biUnset   : execBuiltin(execUnset)
+#   of biExport  : execBuiltin(execExport)
+#   of biState   : execBuiltin(execState)
+#   of biUnexport: execBuiltin(execUnsetexport)
+#   of biUnknown:
+#     raise newException(ValueError, "Unknown builtin called.")
 
