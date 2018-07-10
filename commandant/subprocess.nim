@@ -1,43 +1,27 @@
-import osproc, posix, strformat
-
-
-# ## Low-level Constants/Procedures ## #
-when defined(windows):
-  proc c_fileno*(f: FileHandle): cint {.
-      importc: "_fileno", header: "<stdio.h>".}
-else:
-  proc c_fileno*(f: File): cint {.
-      importc: "fileno", header: "<fcntl.h>".}
-
-
-proc dup_fd(oldHandle, newHandle: FileHandle) =
-  if dup2(oldHandle, newHandle) < 0:
-    raise newException(
-      ValueError,
-      fmt"Unable to duplicate file handle {oldHandle}."
-    )
-
-
-proc dup_fd(oldHandle: FileHandle): FileHandle =
-  result = dup(oldHandle)
-  if result < 0:
-    raise newException(
-      ValueError,
-      fmt"Unable to duplicate file handle {oldHandle}."
-    )
+import osproc, posix, strformat, sequtils, fileutils
 
 
 # ## Public Interface ## #
-type CommandFiles* = object
-  outputFd* : FileHandle
-  errputFd* : FileHandle
-  inputFd*  : FileHandle
+type CommandFiles* = tuple[
+  outputFd : FileHandle,
+  errputFd : FileHandle,
+  inputFd  : FileHandle
+]
 
 
 proc initCommandFiles*(cmdFiles: var CommandFiles) =
-    cmdFiles.outputFd = dup_fd(c_fileno(stdout))
-    cmdFiles.errputFd = dup_fd(c_fileno(stderr))
-    cmdFiles.inputFd  = dup_fd(c_fileno(stdin))
+  var openedFiles = duplicateMany((
+    getFileHandle(stdout),
+    getFileHandle(stderr),
+    getFileHandle(stdin),
+  ))
+  cmdFiles.outputFd = openedFiles[0]
+  cmdFiles.errputFd = openedFiles[1]
+  cmdFiles.inputFd  = openedFiles[2]
+
+
+proc initCommandFiles*(): CommandFiles =
+  initCommandFiles(result)
 
 
 proc closeCommandFiles*(cmdFiles: CommandFiles) =
@@ -49,11 +33,11 @@ proc closeCommandFiles*(cmdFiles: CommandFiles) =
 template genCommandFilesAccessor(accessor, member) =
 
   proc `accessor =`*(cmdFiles: var CommandFiles, file: File) =
-    var result = c_fileno(file)
-    if   result == c_fileno(stdout): result = cmdFiles.outputFd
-    elif result == c_fileno(stderr): result = cmdFiles.errputFd
-    elif result == c_fileno(stdin):  result = cmdFiles.inputFd
-    dup_fd(result, cmdFiles.member)
+    var result = getFileHandle(file)
+    if   result == getFileHandle(stdout): result = cmdFiles.outputFd
+    elif result == getFileHandle(stderr): result = cmdFiles.errputFd
+    elif result == getFileHandle(stdin):  result = cmdFiles.inputFd
+    duplicate(result, cmdFiles.member)
 
   proc accessor*(cmdFiles: CommandFiles): FileHandle =
     result = cmdFiles.member
@@ -64,10 +48,15 @@ genCommandFilesAccessor(errput, errputFd)
 genCommandFilesAccessor(input, inputFd)
 
 
-proc set*(cmdFiles: CommandFiles) =
-  dup_fd(cmdFiles.output, c_fileno(stdout));
-  dup_fd(cmdFiles.errput, c_fileno(stderr));
-  dup_fd(cmdFiles.input, c_fileno(stdin));
+template set*(cmdFiles: CommandFiles) =
+  duplicateMany(
+    cmdFiles,
+    (
+      getFileHandle(stdout),
+      getFileHandle(stderr),
+      getFileHandle(stdin),
+    )
+  )
 
 
 proc callExecutable*(
