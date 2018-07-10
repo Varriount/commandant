@@ -105,7 +105,6 @@ proc tryCallExecutable(
     return false
 
   result = true
-  echo 108
   let process = callExecutable(
     executable = resolvedExe,
     arguments  = arguments,
@@ -141,7 +140,6 @@ proc openFileToken(fileToken: Token, mode: FileMode): File =
       result = stdin
     else:
       result = open(fileToken.data, mode)
-      echo repr(c_fileno(result))
   else:
     raise newException(ValueError, "openFile: Invalid file token.")
 
@@ -155,21 +153,16 @@ proc getCommandFiles*(node: AstNode): CommandFiles =
       operatorKind = child.children[0].term.kind
       fileToken = child.children[1].term
 
+    template setCmdFile(member, mode) =
+      discard close(result.member)
+      result.member = openFileToken(fileToken, mode)
+
     case operatorKind
-    of stdoutToken:
-      result.output = openFileToken(fileToken, fmWrite)
-
-    of stdoutAppToken:
-      result.output = openFileToken(fileToken, fmAppend)
-
-    of stderrToken:
-      result.errput = openFileToken(fileToken, fmWrite)
-
-    of stderrAppToken:
-      result.errput = openFileToken(fileToken, fmAppend)
-
-    of stdinToken:
-      result.input = openFileToken(fileToken, fmRead)
+    of stdoutToken   : setCmdFile(output, fmWrite)
+    of stdoutAppToken: setCmdFile(output, fmAppend)
+    of stderrToken   : setCmdFile(errput, fmWrite)
+    of stderrAppToken: setCmdFile(errput, fmAppend)
+    of stdinToken    : setCmdFile(input,  fmRead)
     else:
       raise newException(ValueError, "Unexpected output token.")
 
@@ -228,8 +221,8 @@ proc execSeperatorNode(vm: CommandantVm, node: AstNode) =
 
 # ## Root Execution ## #
 proc execNode*(vm: CommandantVm, node: AstNode) =
-  echo "In execNode:"
-  echo nodeRepr(node, 1)
+  # echo "In execNode:"
+  # echo nodeRepr(node, 1)
 
   case node.kind
   of commandNode:

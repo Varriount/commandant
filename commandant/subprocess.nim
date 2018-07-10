@@ -12,13 +12,19 @@ else:
 
 proc dup_fd(oldHandle, newHandle: FileHandle) =
   if dup2(oldHandle, newHandle) < 0:
-    raise newException(ValueError, fmt"Unable to duplicate file handle {oldHandle}.")
+    raise newException(
+      ValueError,
+      fmt"Unable to duplicate file handle {oldHandle}."
+    )
 
 
 proc dup_fd(oldHandle: FileHandle): FileHandle =
   result = dup(oldHandle)
   if result < 0:
-    raise newException(ValueError, fmt"Unable to duplicate file handle {oldHandle}.")
+    raise newException(
+      ValueError,
+      fmt"Unable to duplicate file handle {oldHandle}."
+    )
 
 
 # ## Public Interface ## #
@@ -32,11 +38,9 @@ proc initCommandFiles*(cmdFiles: var CommandFiles) =
     cmdFiles.outputFd = dup_fd(c_fileno(stdout))
     cmdFiles.errputFd = dup_fd(c_fileno(stderr))
     cmdFiles.inputFd  = dup_fd(c_fileno(stdin))
-    echo "Init: ", repr(cmdFiles)
 
 
 proc closeCommandFiles*(cmdFiles: CommandFiles) =
-  echo "Close: ", repr(cmdFiles)
   discard close(cmdFiles.outputFd)
   discard close(cmdFiles.errputFd)
   discard close(cmdFiles.inputFd)
@@ -59,36 +63,28 @@ genCommandFilesAccessor(output, outputFd)
 genCommandFilesAccessor(errput, errputFd)
 genCommandFilesAccessor(input, inputFd)
 
+
+proc set*(cmdFiles: CommandFiles) =
+  dup_fd(cmdFiles.output, c_fileno(stdout));
+  dup_fd(cmdFiles.errput, c_fileno(stderr));
+  dup_fd(cmdFiles.input, c_fileno(stdin));
+
+
 proc callExecutable*(
     executable   : string,
     arguments    : seq[string],
     cmdFiles     : CommandFiles): Process =
-  
-  echo "Output: ", cmdFiles.output
-  echo "Errput: ", cmdFiles.errput
-  echo "Input: ", cmdFiles.input
 
   # Save standard output streams
-  let
-    savedStdout = dup_fd(c_fileno(stdout))
-    savedStderr = dup_fd(c_fileno(stderr))
-    savedStdin = dup_fd(c_fileno(stdin))
-
-  # Restore cmdFiles at the end of the function
-  # This code block is actually run when the function ends
-  # (whether normally, or through an exception)
+  var oldCmdFiles: CommandFiles
+  initCommandFiles(oldCmdFiles)
   defer:
-    dup_fd(savedStdout, c_fileno(stdout));
-    dup_fd(savedStderr, c_fileno(stderr));
-    dup_fd(savedStdin, c_fileno(stdin));
-    discard close(savedStdout)
-    discard close(savedStderr)
-    discard close(savedStdin)
+    closeCommandFiles(oldCmdFiles)
 
-  # Set the cmdFiles
-  dup_fd(cmdFiles.output, c_fileno(stdout));
-  dup_fd(cmdFiles.errput, c_fileno(stderr));
-  dup_fd(cmdFiles.input, c_fileno(stdin));
+  # Set the standard streams
+  defer:
+    set(oldCmdFiles)
+  set(cmdFiles)
 
   # Start the process using parent streams, which have
   # just been redirected
