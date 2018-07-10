@@ -11,34 +11,38 @@ when defined(release):
   setControlCHook(handleQuit)
 
 
+
+
 proc main() =
-  var
-    parser: Parser
-    vm = newCommandantVm()
+  proc getInput(vm: CommandantVm, output: var string): bool =
+    result = readLineFromStdin("> ", output)
 
-  initParser(parser)
+  var vm = newCommandantVm(getInput)
+  vm.run()
 
-  var line = ""
-  while true:
-    # Print the prompt, then gather the AST from the parser
-    let breakLoop = not readLineFromStdin("> ", line)
-    if breakLoop:
-      break
+  # initParser(parser)
 
-    # Strip whitespace
-    line = line.strip()
-    if line == "":
-      continue
+  # var line = ""
+  # while true:
+  #   # Print the prompt, then gather the AST from the parser
+  #   let breakLoop = not readLineFromStdin("> ", line)
+  #   if breakLoop:
+  #     break
 
-    # Parse the line
-    var nodes = parse(parser, line)
-    if parser.errorFound:
-      parser.errorFound = false
-      continue
+  #   # Strip whitespace
+  #   line = line.strip()
+  #   if line == "":
+  #     continue
 
-    # Execute the line if no error was encountered during the parse.
-    # echo nodeRepr(nodes)
-    vm.execNode(nodes)
+  #   # Parse the line
+  #   var nodes = parse(parser, line)
+  #   if parser.errorFound:
+  #     parser.errorFound = false
+  #     continue
+
+  #   # Execute the line if no error was encountered during the parse.
+  #   # echo nodeRepr(nodes)
+  #   vm.execNode(nodes)
       
 
 main()

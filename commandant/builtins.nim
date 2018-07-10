@@ -5,7 +5,7 @@
 ## and the builtin routines.
 ## 
 import parser, lexer, tables, strutils, strformat, options
-
+import parseutils, sequtils
 
 # ## Builtin Implementations ## #
 template writeQuoted(outSym, s) =
@@ -15,31 +15,93 @@ template writeQuoted(outSym, s) =
 
 
 template writeOut(outputString) =
-  cmdFiles.output.write(outputString)
+  stdout.write(outputString)
 
 
 template writeOutLn(outputString) =
-  cmdFiles.output.write(outputString)
-  cmdFiles.output.write("\n")
+  stdout.write(outputString)
+  stdout.write("\n")
 
 
 template writeErr(errorString) =
-  cmdFiles.errput.write(errorString)
+  stderr.write(errorString)
 
 
 template writeErrLn(errorString) =
-  cmdFiles.errput.write(errorString)
-  cmdFiles.errput.write("\n")
+  stderr.write(errorString)
+  stderr.write("\n")
+
+
+template emitError(errorString) =
+  stderr.write(errorString)
+  return 1
 
 
 template emitErrorIf(condition, errorString) =
   if condition:
-    cmdFiles.errput.write(errorString)
-    return 1
+    emitError(errorString)
 
 
 template addFmt(s: var string, value: static[string]) =
   s.add(fmt(value))
+
+
+# ## Builtin Definitions ## #
+# iterator chainedString(
+#       stringSeq : seq[string],
+#       startIndex: i): tuple[index, position: int, value: char] =
+#   var position = 0
+#   for index in startIndex..high(stringSeq):
+#     for character in stringSeq[index]:
+#       yield index, position, character
+#       inc position
+# let
+#   functionGrammer = peg"""
+#     \skip \s*
+#     function <- \ident "(" \ident* ")" "="
+#   """
+# proc execDefine(
+#     vm        : CommandantVm,
+#     executable: string,
+#     arguments : seq[string],
+#     cmdFiles  : CommandFiles): int =
+#   ## Define a function.
+#   ## Syntax:
+#   ##   def <function name> =
+#   ##      ...
+#   ##   end
+#   result = 0
+
+#   var
+#     name = ""
+#     commands = newSeq[AstNode]()
+
+#   let valid = (
+#     len(arguments) == 2 and
+#     arguments[1] == "="
+#   )
+
+#   emitErrorIf(not valid):
+#     "Error: Expected an expression of the form 'def <function name> ='."
+
+#   while true:
+#     let commandAst = vm.nextCommand()
+#     emitErrorIf(isNone(commandAst)):
+#       "Error: Function not terminated with 'end' before EOF."
+
+#     var command = commandAst.get()
+
+#     skipTypes
+#     let isEndOfFunction = (
+#       len(command) == 1 and
+#       command[0] == "end"
+#     )
+#     if isEndOfFunction:
+#       break
+
+#     commands.append(command)
+
+#   vm.functions[name] = commands
 
 
 proc execEcho(

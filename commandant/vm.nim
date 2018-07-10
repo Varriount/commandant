@@ -1,7 +1,5 @@
 import tables, regex, osproc, os, strformat, sequtils, streams, posix
-import lexer, parser, subprocess, treeutils
-
-
+import lexer, parser, subprocess, treeutils, strutils, options
 
 
 # Constants
@@ -10,25 +8,73 @@ const varRegex = toPattern(r"\$\(([^ \\t]+)\)")
 
 type
   VariableMap* = Table[string, seq[string]]
-  FunctionMap* = Table[string, seq[string]]
+  FunctionMap* = Table[string, seq[AstNode]]
+
+  VmInputProc* = proc (
+    vm: CommandantVm,
+    output: var string
+  ): bool {.closure.}
+
+  VmInputMode* = enum
+    imCommand
+    imFunction
+
   CommandantVm* = ref object
-    variables*: VariableMap
-    functions*: FunctionMap
-    lastExitCode*: string
+    parser*    : Parser
+    inputProc* : VmInputProc
+    inputMode* : VmInputMode
+    variables* : VariableMap
+    functions* : FunctionMap
 
 
-proc newCommandantVm*(): CommandantVm =
+# ## Basic VM Procedures ## #
+proc execNode*(vm: CommandantVm, node: AstNode)
+
+
+proc newCommandantVm*(inputProc: VmInputProc): CommandantVm =
   new(result)
+  result.parser = newParser()
   result.variables = initTable[string, seq[string]]()
-  result.functions = initTable[string, seq[string]]()
+  result.functions = initTable[string, seq[AstNode]]()
+  result.inputProc = inputProc
+
+  result.variables["lastExitCode"] = @["0"]
+
+
+proc `lastExitCode=`*(vm: CommandantVm, value: string) {.inline.} =
+  vm.variables["lastExitCode"][0] = value
+
+proc `lastExitCode`*(vm: CommandantVm): string {.inline.} =
+  result = vm.variables["lastExitCode"][0]
+
+
+proc nextCommand(vm: CommandantVm): Option[AstNode] =
+  var
+    line = ""
+    inputOpen = true
+
+  while line == "" and inputOpen:
+    inputOpen = vm.inputProc(vm, line)
+    line = strip(line)
+
+  if not inputOpen:
+    return none(AstNode)
+
+  result = some(parse(vm.parser, line))
+
+
+proc run*(vm: var CommandantVm) =
+  while true:
+    let commandAst = nextCommand(vm)
+    if isSome(commandAst):
+      execNode(vm, get(commandAst))
+    else:
+      break
 
 
 # ## Execution Procedures ## #
 # Include the modules containing code for executing builtins
 include builtins
-proc execCommandNode(vm: CommandantVm, node: AstNode)
-proc execSeperatorNode(vm: CommandantVm, node: AstNode)
-proc execNode*(vm: CommandantVm, node: AstNode)
 
 
 # ### Command Execution ### #
@@ -59,6 +105,7 @@ proc tryCallExecutable(
     return false
 
   result = true
+  echo 108
   let process = callExecutable(
     executable = resolvedExe,
     arguments  = arguments,
@@ -94,16 +141,14 @@ proc openFileToken(fileToken: Token, mode: FileMode): File =
       result = stdin
     else:
       result = open(fileToken.data, mode)
+      echo repr(c_fileno(result))
   else:
     raise newException(ValueError, "openFile: Invalid file token.")
 
 
 proc getCommandFiles*(node: AstNode): CommandFiles =
   assert node.kind == outputNode
-
-  result.output = stdout
-  result.errput = stderr
-  result.input = stdin
+  initCommandFiles(result)
 
   for child in node.children:
     let
@@ -112,23 +157,18 @@ proc getCommandFiles*(node: AstNode): CommandFiles =
 
     case operatorKind
     of stdoutToken:
-      filteredClose(result.output)
       result.output = openFileToken(fileToken, fmWrite)
 
     of stdoutAppToken:
-      filteredClose(result.output)
       result.output = openFileToken(fileToken, fmAppend)
 
     of stderrToken:
-      filteredClose(result.errput)
       result.errput = openFileToken(fileToken, fmWrite)
 
     of stderrAppToken:
-      filteredClose(result.errput)
       result.errput = openFileToken(fileToken, fmAppend)
 
     of stdinToken:
-      filteredClose(result.input)
       result.input = openFileToken(fileToken, fmRead)
     else:
       raise newException(ValueError, "Unexpected output token.")
@@ -145,7 +185,7 @@ proc execCommandNode(vm: CommandantVm, node: AstNode) =
   # Handle command redirection
   let cmdFiles = getCommandFiles(node.children[0])
   defer:
-    close(cmdFiles)
+    closeCommandFiles(cmdFiles)
 
   # Build command string
   let

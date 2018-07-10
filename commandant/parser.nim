@@ -61,12 +61,8 @@ type
     errorFound*: bool
 
 
-proc initParser*(result: var Parser) =
-  result = Parser(
-    lexer: Lexer(),
-    token: Token(),
-    errorFound: false
-  )
+proc newParser*(): Parser =
+  new(result)
   initLexer(result.lexer)
   initToken(result.token)
 
