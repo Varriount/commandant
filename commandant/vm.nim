@@ -66,6 +66,7 @@ proc nextCommand(vm: CommandantVm): Option[AstNode] =
 proc run*(vm: var CommandantVm) =
   while true:
     let commandAst = nextCommand(vm)
+    # echo nodeRepr(commandAst.get())
     if isSome(commandAst):
       execNode(vm, get(commandAst))
     else:
@@ -78,6 +79,21 @@ include builtins
 
 
 # ### Command Execution ### #
+proc tryCallFunction(
+    vm        : CommandantVm,
+    executable: string,
+    arguments : seq[string],
+    cmdFiles   : CommandFiles): bool =
+  result = (executable in vm.functions)
+  if not result:
+    return result
+
+  let functionAsts = vm.functions[executable]
+  for node in functionAsts:
+    vm.execNode(node)
+
+
+
 proc tryCallBuiltin(
     vm        : CommandantVm,
     executable: string,
@@ -189,6 +205,7 @@ proc execCommandNode(vm: CommandantVm, node: AstNode) =
   # Call builtin or command
   let validCommand = (
     tryCallBuiltin(vm, executable, arguments, cmdFiles) or
+    tryCallFunction(vm, executable, arguments, cmdFiles) or
     tryCallExecutable(vm, executable, arguments, cmdFiles) 
   )
 

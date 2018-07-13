@@ -43,6 +43,26 @@ proc addnodeRepr(n: AstNode, indent: Indent, result: var string) =
       addnodeRepr(child, nextIndent, result)
 
 
-proc nodeRepr*(n: AstNode, indentLevel = 0): string =
+proc nodeRepr*(n: AstNode, indentLevel: int = 0): string =
   let startIndent = repeat(reprIndent, indentLevel)
   addnodeRepr(n, startIndent, result)
+
+
+proc stringifyAux(n: AstNode, result: var string) =
+  case n.kind
+  of termNode:
+    if n.term.kind == strToken:
+      result.add(fmt("\"{n.term.data}\""))
+    else:
+      result.add(n.term.data)
+    result.add(' ')
+  else:
+    for child in n.children:
+      stringifyAux(child, result)
+
+
+proc `$`*(n: AstNode): string =
+  result = ""
+  stringifyAux(n, result)
+  result.setLen(high(result))
+

@@ -34,6 +34,7 @@ template writeErrLn(errorString) =
 
 template emitError(errorString) =
   stderr.write(errorString)
+  echo "\n"
   return 1
 
 
@@ -60,48 +61,52 @@ template addFmt(s: var string, value: static[string]) =
 #     \skip \s*
 #     function <- \ident "(" \ident* ")" "="
 #   """
-# proc execDefine(
-#     vm        : CommandantVm,
-#     executable: string,
-#     arguments : seq[string],
-#     cmdFiles  : CommandFiles): int =
-#   ## Define a function.
-#   ## Syntax:
-#   ##   def <function name> =
-#   ##      ...
-#   ##   end
-#   result = 0
+proc execDefine(
+    vm        : CommandantVm,
+    executable: string,
+    arguments : seq[string],
+    cmdFiles  : CommandFiles): int =
+  ## Define a function.
+  ## Syntax:
+  ##   def <function name> =
+  ##      ...
+  ##   end
+  result = 0
 
-#   var
-#     name = ""
-#     commands = newSeq[AstNode]()
+  let valid = (
+    len(arguments) == 2 and
+    arguments[1] == "="
+  )
 
-#   let valid = (
-#     len(arguments) == 2 and
-#     arguments[1] == "="
-#   )
+  emitErrorIf(not valid):
+    "Error: Expected an expression of the form 'def <function name> ='."
 
-#   emitErrorIf(not valid):
-#     "Error: Expected an expression of the form 'def <function name> ='."
+  var
+    name = arguments[0]
+    commands = newSeq[AstNode]()
 
-#   while true:
-#     let commandAst = vm.nextCommand()
-#     emitErrorIf(isNone(commandAst)):
-#       "Error: Function not terminated with 'end' before EOF."
+  emitErrorIf(not validIdentifier(arguments[0])):
+    fmt("Error: \"{name}\" is not a valid identifier.")
 
-#     var command = commandAst.get()
+  while true:
+    let commandAst = vm.nextCommand()
+    emitErrorIf(isNone(commandAst)):
+      "Error: Function not terminated with 'end' before EOF."
 
-#     skipTypes
-#     let isEndOfFunction = (
-#       len(command) == 1 and
-#       command[0] == "end"
-#     )
-#     if isEndOfFunction:
-#       break
+    var command = commandAst.get()
+    # echo nodeRepr(command)
 
-#     commands.append(command)
+    let isEndOfFunction = (
+      command.kind == commandNode and
+      len(command.children) == 2  and
+      command.children[1].term.data == "end"
+    )
+    if isEndOfFunction:
+      break
 
-#   vm.functions[name] = commands
+    commands.add(command)
+
+  vm.functions[name] = commands
 
 
 proc execEcho(
@@ -219,6 +224,7 @@ proc execState(
     listEnd   = "]"
     listSep   = ", "
   
+  # Variables
   writeOutLn("Variables:")
   for key, values in vm.variables:
     writeOut(fmt("    \"{key}\": "))
@@ -233,6 +239,13 @@ proc execState(
       writeQuoted(writeOut, values[i])
       
     writeOutLn(listEnd)
+  
+  # Functions
+  writeOutLn("Functions:")
+  for key, values in vm.functions:
+    writeOutLn(fmt("    \"{key}\": "))
+    for value in values:
+      writeOutLn(fmt"      {value}")
 
 
 # ## Public Interface ## #
@@ -251,6 +264,7 @@ const builtinMap = {
   "export"  : execExport,
   "unexport": execUnexport,
   "state"   : execState,
+  "def"     : execDefine,
 }
 
 
