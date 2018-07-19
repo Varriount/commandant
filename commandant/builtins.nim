@@ -4,7 +4,7 @@
 ## a circular dependancy between the virtual machine type
 ## and the builtin routines.
 ## 
-import parser, lexer, tables, strutils, strformat, options
+import parser, lexer, tables, strutils, strformat, options, os
 import parseutils, sequtils
 
 # ## Builtin Implementations ## #
@@ -106,7 +106,7 @@ proc execDefine(
 
     commands.add(command)
 
-  vm.functions[name] = commands
+  vm.setFunc(name, commands)
 
 
 proc execEcho(
@@ -155,7 +155,7 @@ proc execSet(
   emitErrorIf(not validIdentifier(target)):
     fmt("Error: \"{target}\" is not a valid identifier.")
 
-  vm.variables[target] = values
+  vm.setVar(target, values)
 
 
 proc execUnset(
@@ -181,7 +181,7 @@ proc execUnset(
     return 1
 
   for arg in arguments:
-    del(vm.variables, arg)
+    vm.delVar(arg)
 
 
 proc execExport(
@@ -189,11 +189,54 @@ proc execExport(
     executable: string,
     arguments : seq[string],
     cmdFiles  : CommandFiles): int =
-  ## Export a variable.
+  ## Export and set a variable.
   ## Syntax:
   ##   export x [ = <y> ... <z> ]
   result = 0
-  discard
+
+  let 
+    exportMultiple = (len(arguments) > 0)
+    exportAndSet = (
+      len(arguments) >= 3 and
+      arguments[1] == "="
+    )
+
+  emitErrorIf(not (exportMultiple or exportAndSet)):
+    "Error: Expected an expression of the form '<x> [ = <y> ... <z>]'."
+
+  if exportAndSet:
+    let
+      target = arguments[0]
+      values = arguments[2..^1]
+    
+    emitErrorIf(not validIdentifier(target)):
+      fmt("Error: \"{target}\" is not a valid identifier.")
+
+    vm.setVar(target, values)
+    putEnv(target, join(values, " "))
+  
+  else: # exportMultiple
+    var invalidTargets = newSeq[string]()
+    # Identifier checks
+    for target in arguments:
+      if not validIdentifier(target):
+        invalidTargets.add(target)
+
+    emitErrorIf(len(invalidTargets) > 0):
+      fmt("Error: {invalidTargets} are not valid indentifier(s).")
+
+    # Value checks
+    for target in arguments:
+      if not vm.hasVar(target):
+        invalidTargets.add(target)
+
+    emitErrorIf(len(invalidTargets) > 0):
+      fmt("Error: {invalidTargets} are not set variables.")
+
+    # Export
+    for target in arguments:
+      let values = vm.getVar(target).get()
+      os.putEnv(target, join(values, " "))
 
 
 proc execUnexport(
@@ -225,27 +268,27 @@ proc execState(
     listSep   = ", "
   
   # Variables
-  writeOutLn("Variables:")
-  for key, values in vm.variables:
-    writeOut(fmt("    \"{key}\": "))
-    writeOut(listStart)
+  # writeOutLn("Variables:")
+  # for key, values in vm.variables:
+  #   writeOut(fmt("    \"{key}\": "))
+  #   writeOut(listStart)
 
-    for i in 0..high(values):
-      writeQuoted(writeOut, values[i])
-      break
+  #   for i in 0..high(values):
+  #     writeQuoted(writeOut, values[i])
+  #     break
 
-    for i in 1..high(values):
-      writeOut(listSep)
-      writeQuoted(writeOut, values[i])
+  #   for i in 1..high(values):
+  #     writeOut(listSep)
+  #     writeQuoted(writeOut, values[i])
       
-    writeOutLn(listEnd)
+  #   writeOutLn(listEnd)
   
-  # Functions
-  writeOutLn("Functions:")
-  for key, values in vm.functions:
-    writeOutLn(fmt("    \"{key}\": "))
-    for value in values:
-      writeOutLn(fmt"      {value}")
+  # # Functions
+  # writeOutLn("Functions:")
+  # for key, values in vm.functions:
+  #   writeOutLn(fmt("    \"{key}\": "))
+  #   for value in values:
+  #     writeOutLn(fmt"      {value}")
 
 
 # ## Public Interface ## #

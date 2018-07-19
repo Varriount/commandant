@@ -1,5 +1,24 @@
 import lexer, strformat
 
+#[
+# Node Expressions
+expression
+commands    <- command [ SEPERATOR_LIT command ]*
+command     <- ( WORD_LIT | STRING_LIT | redirection )+
+redirection <- REDIRECT_LIT ( word | string )
+if_stmt     <- "if"    LPAREN_LIT commands RPARENT_LIT () END_LIT
+while_stmt  <- "while" LPAREN_LIT commands RPARENT_LIT () END_LIT
+for_stmt    <- "for" WORD_LIT "in" LPAREN_LIT commands RPARENT_LIT () END_LIT
+
+# Token expressions
+WORD_LIT      <- \[^\s\t]\
+STRING_LIT    <- \"(\\.|[^"\\])*"\
+SEPERATOR_LIT <- ( "||" | "&&" )
+REDIRECT_LIT  <- ( ">" | ">>" | "!>" | "!>>" | "<" )
+LPAREN_LIT    <- "("
+RPAREN_LIT    <- ")"
+END_LIT       <- "end"
+]#
 
 # ## AstNode Implementation ## #
 type
@@ -51,6 +70,12 @@ proc makeTermNode(nodeValue: string|Token): AstNode =
     makeNode(termNode, Token(kind: strToken, data: nodeValue, position: 0))
   else:
     makeNode(termNode, nodeValue)
+
+
+proc skipTypes*(node: AstNode, kinds: set[AstNodeKind]): AstNode =
+  result = node
+  while result.kind in kinds:
+    result = result.children[^1]
 
 
 # ## Parser Implementation ## #
