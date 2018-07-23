@@ -4,9 +4,10 @@
 ## a circular dependancy between the virtual machine type
 ## and the builtin routines.
 ## 
-import parser, lexer, tables, strutils, strformat, options, os
+import parser, lexer, tables, strutils, strformat, os
 import parseutils, sequtils
 
+import regex except Option
 # ## Builtin Implementations ## #
 template writeQuoted(outSym, s) =
   outSym("\"")
@@ -47,27 +48,16 @@ template addFmt(s: var string, value: static[string]) =
   s.add(fmt(value))
 
 
-# ## Builtin Definitions ## #
-# iterator chainedString(
-#       stringSeq : seq[string],
-#       startIndex: i): tuple[index, position: int, value: char] =
-#   var position = 0
-#   for index in startIndex..high(stringSeq):
-#     for character in stringSeq[index]:
-#       yield index, position, character
-#       inc position
-# let
-#   functionGrammer = peg"""
-#     \skip \s*
-#     function <- \ident "(" \ident* ")" "="
-#   """
+# ### Flow-Control Commands ### #
 proc execDefine(
     vm        : CommandantVm,
     executable: string,
     arguments : seq[string],
+    commands  : seq[AstNode],
     cmdFiles  : CommandFiles): int =
   ## Define a function.
   ## Syntax:
+  ##       0               ^1
   ##   def <function name> =
   ##      ...
   ##   end
@@ -77,38 +67,115 @@ proc execDefine(
     len(arguments) == 2 and
     arguments[1] == "="
   )
-
   emitErrorIf(not valid):
     "Error: Expected an expression of the form 'def <function name> ='."
 
-  var
-    name = arguments[0]
-    commands = newSeq[AstNode]()
+  var name = arguments[0]
 
   emitErrorIf(not validIdentifier(arguments[0])):
     fmt("Error: \"{name}\" is not a valid identifier.")
 
-  while true:
-    let commandAst = vm.nextCommand()
-    emitErrorIf(isNone(commandAst)):
-      "Error: Function not terminated with 'end' before EOF."
-
-    var command = commandAst.get()
-    # echo nodeRepr(command)
-
-    let isEndOfFunction = (
-      command.kind == commandNode and
-      len(command.children) == 2  and
-      command.children[1].term.data == "end"
-    )
-    if isEndOfFunction:
-      break
-
-    commands.add(command)
-
   vm.setFunc(name, commands)
 
 
+proc execIf(
+    vm        : CommandantVm,
+    executable: string,
+    arguments : seq[string],
+    commands  : seq[AstNode],
+    cmdFiles  : CommandFiles): int =
+  # echo "here"
+  ## Run a series of commands, based on whether a single command returns
+  ## success.
+  ## Syntax:
+  ##      0   1      ^3 ^2  ^1
+  ##   if "(" <command> ")" then
+  ##      ...
+  ##   end
+  let valid = (
+    len(arguments) >= 3   and
+    arguments[0] == "("   and
+    arguments[^2] == ")"  and
+    arguments[^1] == "then"
+  )
+  emitErrorIf(not valid):
+    "Error: Expected an expression of the form 'if ( <command> ) then'."
+
+  let conditionCommand = arguments[1..^3]
+
+  tryCallCommand(vm, conditionCommand, cmdFiles)
+  if vm.lastExitCode == "0":
+    for command in commands:
+      execLine(vm, command)
+
+
+proc execWhile(
+    vm        : CommandantVm,
+    executable: string,
+    arguments : seq[string],
+    commands  : seq[AstNode],
+    cmdFiles  : CommandFiles): int =
+  ## Run a series of commands, while a single command returns 0
+  ## Syntax:
+  ##         0   1      ^3 ^2  ^2
+  ##   while "(" <command> ")" do
+  ##      ...
+  ##   end
+  let valid = (
+    len(arguments) >= 4   and
+    arguments[0] == "("   and
+    arguments[^2] == ")"  and
+    arguments[^1] == "do"
+  )
+  emitErrorIf(not valid):
+    "Error: Expected an expression of the form 'while ( <command> ) do'."
+
+  let conditionCommand = arguments[1..^3]
+
+  while true:
+    tryCallCommand(vm, conditionCommand, cmdFiles)
+    if vm.lastExitCode != "0":
+      break
+
+    for command in commands:
+      execLine(vm, command)
+
+
+proc execFor(
+    vm        : CommandantVm,
+    executable: string,
+    arguments : seq[string],
+    commands  : seq[AstNode],
+    cmdFiles  : CommandFiles): int =
+  ## Run a series of commands, once for each token output by a single command.
+  ## Syntax:
+  ##       0       1  2   3      ^3 ^2  ^1
+  ##   for ident in "(" <command> ")" do =
+  ##      ...
+  ##   end
+  let valid = (
+    len(arguments) >= 6   and
+    arguments[1] == "in"   and
+    arguments[2] == "("   and
+    arguments[^2] == ")"  and
+    arguments[^1] == "do"
+  )
+  emitErrorIf(not valid):
+    "Error: Expected an expression of the form 'for <regex> in ( <command> ) do'."
+
+  let
+    rawRegex = arguments[0]
+    command = arguments[3..^3]
+
+  var regex: Regex
+  try:
+    regex = toPattern(rawRegex)
+  except RegexError:
+    emitError:
+      fmt"Regex Error: {getCurrentException().msg}"
+
+
+# ### Utility Commands ### #
 proc execEcho(
     vm        : CommandantVm,
     executable: string,
@@ -131,6 +198,7 @@ proc execEcho(
   result = 0
 
 
+# ### VM/Environment Variable Procedures ### #
 proc execSet(
     vm        : CommandantVm,
     executable: string,
@@ -292,12 +360,36 @@ proc execState(
 
 
 # ## Public Interface ## #
-type Builtin = proc (
+type
+  Statement = proc (
+    vm        : CommandantVm,
+    executable: string,
+    arguments : seq[string],
+    commands  : seq[AstNode],
+    cmdFiles  : CommandFiles
+  ): int
+
+  Builtin = proc (
     vm        : CommandantVm,
     executable: string,
     arguments : seq[string],
     cmdFiles  : CommandFiles
   ): int
+
+
+const statementMap = {
+  "if"   : execIf,
+  "while": execWhile,
+  "for"  : execFor,
+  "def"  : execDefine,
+}
+
+
+proc getStatement(name: string): Option[Statement] =
+  for pair in statementMap:
+    let (statementName, statement) = pair
+    if name == statementName:
+      return some(Statement(statement))
 
 
 const builtinMap = {
@@ -307,14 +399,13 @@ const builtinMap = {
   "export"  : execExport,
   "unexport": execUnexport,
   "state"   : execState,
-  "def"     : execDefine,
 }
 
 
 proc getBuiltin(name: string): Option[Builtin] =
   for pair in builtinMap:
-    let (builtin_name, builtin) = pair
-    if name == builtin_name:
+    let (builtinName, builtin) = pair
+    if name == builtinName:
       return some(Builtin(builtin))
 
 

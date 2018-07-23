@@ -2,7 +2,7 @@ import lexer, strformat
 
 #[
 # Node Expressions
-expression
+expression  <- if_stmt | for_stmt | while_stmt
 commands    <- command [ SEPERATOR_LIT command ]*
 command     <- ( WORD_LIT | STRING_LIT | redirection )+
 redirection <- REDIRECT_LIT ( word | string )
@@ -26,6 +26,7 @@ type
     emptyNode
     termNode
     expressionNode
+    statementNode
     commandNode
     seperatorNode
     outputNode
@@ -38,18 +39,18 @@ type
       children*: seq[AstNode]
 
 
-template makeNode(nodeKind: static[AstNodeKind], nodeValue): AstNode =
+template makeNode*(nodeKind: static[AstNodeKind], nodeValue): AstNode =
   when nodeKind == termNode:
     AstNode(kind: nodeKind, term: nodeValue)
   else:
     AstNode(kind: nodeKind, children: nodeValue)
     
 
-template addNewNode(parent: AstNode, kind: static[AstNodeKind], value) =
+template addNewNode*(parent: AstNode, kind: static[AstNodeKind], value) =
   parent.children.add(makeNode(kind, value))
 
 
-template add(parent: AstNode, child: AstNode) =
+template add*(parent: AstNode, child: AstNode) =
   parent.children.add(child)
 
 
@@ -96,6 +97,52 @@ proc readToken(parser: var Parser) =
   nextToken(parser.lexer, parser.token)
 
 
+# template matchTokenExpr(
+#       parser: Parser,
+#       matchExpr: string): Token =
+#   let
+#     token {.inject.} = parser.token 
+#     data {.inject.} = parser.token.data
+#     kind {.inject.} = parser.token.kind
+
+#   if matchExpr:
+#     result = parser.token
+#   else:
+#     initToken(result)
+
+
+# proc matchToken(
+#       parser        : Parser,
+#       expectedKind  : TokenKind,
+#       expectedData  : string): Option[Token] =
+#   result = matchTokenExpr(
+#     expectedKind == kind
+#     expectedData == data
+#   )
+
+
+# proc matchToken(
+#       parser: Parser,
+#       data  : string,
+#       kind  : TokenKind): Token =
+#   result = matchTokenExpr(
+#     expectedKind == kind
+#     expectedData == data
+#   )
+
+
+# proc matchToken(
+#       parser: Parser,
+#       data  : string): Token =
+#   result = matchTokenExpr(expectedData == data)
+
+
+# proc matchToken(
+#       parser: Parser,
+#       kind  : TokenKind): Token =
+#   result = matchTokenExpr(expectedKind == kind)
+
+
 proc reportError(parser: var Parser, msg: string) =
   echo fmt"Error (Column {parser.lexer.position}): ", msg
   parser.errorFound = true
@@ -131,7 +178,7 @@ proc parseCommand(parser: var Parser): AstNode =
     parser.reportError("Command expected.")
 
 
-proc parseExpression(parser: var Parser, precedenceLimit: int): AstNode =
+proc parseMultiCommand(parser: var Parser, precedenceLimit: int): AstNode =
   result = parseCommand(parser)
 
   var
@@ -146,7 +193,7 @@ proc parseExpression(parser: var Parser, precedenceLimit: int): AstNode =
     readToken(parser)
 
     let
-      rightExpression = parseExpression(parser, precedence)
+      rightExpression = parseMultiCommand(parser, precedence)
       leftExpression = result
 
     result = makeNode(
@@ -162,9 +209,45 @@ proc parseExpression(parser: var Parser, precedenceLimit: int): AstNode =
     precedence = getPrecedence(opToken)
 
 
+# proc parseDef(parser: var Parser): Optional[AstNode] =
+#   let start = matchToken(parser, wordToken, "if")
+#   if not valid:
+#     return none(AstNode)
+
+#   readToken(parser)
+#   let target 
+#   if not valid:
+#     parser.reportError("Identifier expected.")
+#     return none(AstNode)
+
+
+#   let commands = parseMultiCommand(parser, 0)
+
+
+# proc parseIf(parser: var Parser): Optional[AstNode] =
+#   if not parser.expect(wordToken, "if"):
+#     return none(AstNode)
+
+#   let commands = parseMultiCommand(parser, 0)
+
+
+# proc parseWhile(parser: var Parser): Optional[AstNode] =
+#   if not parser.expect(wordToken, "while"):
+#     return none(AstNode)
+
+#   let commands = parseMultiCommand(parser, 0)
+
+
+# proc parseFor(parser: var Parser): Optional[AstNode] =
+#   if not parser.expect(wordToken, "for"):
+#     return none(AstNode)
+
+#   let commands = parseMultiCommand(parser, 0)
+
+
 proc parse*(parser: var Parser, s: string): AstNode =
   result = AstNode(kind: emptyNode)
 
   initLexer(parser.lexer, s)
   readToken(parser)
-  result = parseExpression(parser, 0)
+  result = parseMultiCommand(parser, 0)

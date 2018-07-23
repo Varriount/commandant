@@ -1,10 +1,7 @@
-import tables, regex, osproc, os, strformat, sequtils, streams, posix
+import tables, osproc, os, strformat, sequtils, streams, posix
 import strutils
-import lexer, parser, subprocess, treeutils, strutils, options
 
-
-# Constants
-const varRegex = toPattern(r"\$\(([^ \\t]+)\)")
+import lexer, parser, subprocess, treeutils, options
 
 
 type
@@ -15,80 +12,88 @@ type
     vm: CommandantVm,
     output: var string
   ): bool {.closure.}
+    ## Used by the VM to retrieve the next line of input.
 
   StackFrame = ref object
-    parent*     : StackFrame
-    execIndex*  : int
-    astBlock*   : seq[AstNode]
     variables*  : VariableMap
     functions*  : FunctionMap
+    case isRoot: bool
+    of true:
+      isFinished: bool
+    of false:
+      astBlock*   : seq[AstNode]
+      execIndex*  : int
 
   CommandantVm* = ref object
-    parser*    : Parser
-    inputProc* : VmInputProc
-    callStack  : seq[StackFrame]
+    parser    : Parser
+    inputProc : VmInputProc
+    callStack : seq[StackFrame]
+    depth     : int
 
 
 # ## Basic VM Procedures ## #
 proc execNode*(vm: CommandantVm, node: AstNode)
+proc execLine*(vm: CommandantVm, node: AstNode)
+proc `lastExitCode=`*(vm: CommandantVm, value: string) {.inline.}
+proc `lastExitCode`*(vm: CommandantVm): string {.inline.}
 
 
 proc newCommandantVm*(inputProc: VmInputProc): CommandantVm =
   new(result)
-  result.parser = newParser()
+  result.parser    = newParser()
   result.inputProc = inputProc
   result.callStack = @[StackFrame(
-    parent     : nil,
-    execIndex  : 0,
-    astBlock   : nil,
-    variables  : initTable[string, seq[string]](),
-    functions  : initTable[string, seq[AstNode]]()
+    isRoot    : true,
+    isFinished: false,
+    variables : initTable[string, seq[string]](),
+    functions : initTable[string, seq[AstNode]]()
   )]
 
-  result.callStack[0].variables["lastExitCode"] = @["0"]
-
-
-proc `lastExitCode=`*(vm: CommandantVm, value: string) {.inline.} =
-  vm.callStack[0].variables["lastExitCode"] = @[value]
-
-proc `lastExitCode`*(vm: CommandantVm): string {.inline.} =
-  result = vm.callStack[0].variables["lastExitCode"][0]
+  result.lastExitCode = "0"
 
 
 proc nextCommand(vm: CommandantVm): Option[AstNode] =
-  var frame = vm.callStack[^1]
+  var line = ""
 
-  if len(vm.callStack) == 1:
-    var line = ""
+  while line == "":
+    let inputOpen = vm.inputProc(vm, line)
+    if not inputOpen:
+      return none(AstNode)
 
-    while line == "":
-      let inputOpen = vm.inputProc(vm, line)
-      if not inputOpen:
-        return none(AstNode)
-      line = strip(line)
+    line = strip(line)
 
-    result = some(parse(vm.parser, line))
+  result = some(parse(vm.parser, line))
+
+
+proc runFrame(vm: CommandantVm, frame: StackFrame) =
+  if frame.isRoot:
+    let wrappedNode = nextCommand(vm)
+    if isNone(wrappedNode):
+      frame.isFinished = true
+    else:
+      execLine(vm, get(wrappedNode))
   else:
-    result = some(frame.astBlock[frame.execIndex])
+    execLine(vm, frame.astBlock[frame.execIndex])
     inc frame.execIndex
+
+
+proc finished(frame: StackFrame): bool =
+  case frame.isRoot
+  of true:
+    return frame.isFinished
+  of false:
+    return frame.execIndex >= len(frame.astBlock)
 
 
 proc run*(vm: var CommandantVm) =
   while true:
-    let commandAst = nextCommand(vm)
-    # echo nodeRepr(commandAst.get())
-    if isSome(commandAst):
-      execNode(vm, get(commandAst))
-    else:
-      break
+    let frame = vm.callStack[^1]
+    runFrame(vm, frame)
 
-
-# Frame Procedures
-proc execute(vm: CommandantVm, frame: StackFrame) = 
-  while frame.execIndex < len(frame.astBlock):
-    echo frame.execIndex
-    execNode(vm, frame.astBlock[frame.execIndex])
-    inc frame.execIndex
+    if frame.finished:
+      setLen(vm.callStack, high(vm.callStack))
+    if len(vm.callStack) == 0:
+      quit()
 
 
 # ## Variable Procedures ## #
@@ -147,10 +152,29 @@ proc hasVar(vm: CommandantVm, name: string): bool =
     result = true
 
 
+# Builtin Variable Setters/Getters
+proc `lastExitCode=`*(vm: CommandantVm, value: string) {.inline.} =
+  setVar(vm, "lastExitCode", @[value])
+
+proc `lastExitCode`*(vm: CommandantVm): string {.inline.} =
+  result = get(getVar(vm, "lastExitCode"))[0]
+
+
 # ## Execution Procedures ## #
+proc tryCallCommand(
+    vm        : CommandantVm,
+    executable: string,
+    arguments : seq[string],
+    cmdFiles  : CommandFiles
+)
+proc tryCallCommand(
+    vm        : CommandantVm,
+    arguments : seq[string],
+    cmdFiles  : CommandFiles
+)
+
 # Include the modules containing code for executing builtins
 include builtins
-
 
 # ### Command Execution ### #
 proc tryCallFunction(
@@ -174,7 +198,7 @@ proc tryCallFunction(
 
   # Retrieve the function AST, create a new stack frame, then execute.
   var functionFrame = StackFrame(
-    parent   : sourceFrame,
+    isRoot   : false,
     execIndex: 0,
     astBlock : sourceFrame.functions[executable],
     variables: initTable[string, seq[string]](),
@@ -182,8 +206,25 @@ proc tryCallFunction(
   )
 
   add(vm.callStack, functionFrame)
-  execute(vm, functionFrame)
-  setLen(vm.callStack, high(vm.callStack))
+
+
+proc tryCallStatement(
+    vm        : CommandantVm,
+    executable: string,
+    arguments : seq[string],
+    commands  : seq[AstNode],
+    cmdFiles  : CommandFiles): bool =
+  let statement = getStatement(executable)
+  result = isSome(statement)
+
+  if result:
+    discard get(statement)(
+      vm         = vm, 
+      executable = executable, 
+      arguments  = arguments, 
+      commands   = commands,
+      cmdFiles   = cmdFiles,
+    )
 
 
 proc tryCallBuiltin(
@@ -207,7 +248,7 @@ proc tryCallExecutable(
     vm        : CommandantVm,
     executable: string,
     arguments : seq[string],
-    cmdFiles   : CommandFiles): bool =
+    cmdFiles  : CommandFiles): bool =
   let resolvedExe = findExe(executable)
   if resolvedExe == "":
     return false
@@ -231,6 +272,31 @@ proc handleInvalidCommand(
       echo fmt"'{executable}' is a directory."
   else:
     echo fmt"Cannot find command/executable '{executable}'."
+
+
+proc tryCallCommand(
+    vm        : CommandantVm,
+    executable: string,
+    arguments : seq[string],
+    cmdFiles   : CommandFiles) =
+
+  let validCommand = (
+    tryCallBuiltin(vm, executable, arguments, cmdFiles) or
+    tryCallFunction(vm, executable, arguments, cmdFiles) or
+    tryCallExecutable(vm, executable, arguments, cmdFiles) 
+  )
+
+  # Handle invalid command
+  if not validCommand:
+    vm.lastExitCode = "1"
+    handleInvalidCommand(vm, executable, arguments, cmdFiles)
+
+
+proc tryCallCommand(
+    vm        : CommandantVm,
+    arguments : seq[string],
+    cmdFiles  : CommandFiles) =
+  tryCallCommand(vm, arguments[0], arguments[1..^1], cmdFiles)
 
 
 proc openFileToken(fileToken: Token, mode: FileMode): File =
@@ -275,10 +341,48 @@ proc getCommandFiles*(node: AstNode): CommandFiles =
       raise newException(ValueError, "Unexpected output token.")
 
 
+# ## AST Preprocessing ## #
+proc isEndCommand(commandAst: AstNode): bool =
+  result = (
+    commandAst.kind == commandNode and
+    len(commandAst.children) == 2  and
+    commandAst.children[1].term.data == "end"
+  )
+
+
+proc isStatement(commandAst: AstNode): bool =
+  result = (
+    commandAst.kind == commandNode and
+    isSome(getStatement(commandAst.children[1].term.data))
+  )
+
+
+proc tryProcessingStatement(vm: CommandantVm, node: AstNode): Option[AstNode] =
+  if not isStatement(node):
+    return
+
+  var commands = @[node]
+  while true:
+    let commandAstOpt = vm.nextCommand()
+    if isNone(commandAstOpt):
+      echo "Invalid statement: EOF reached."
+      return
+
+    let commandAst = commandAstOpt.get()
+    if isEndCommand(commandAst):
+      break
+    
+    let subStatement = tryProcessingStatement(vm, commandAst)
+    if isSome(subStatement):
+      commands.add(get(subStatement))
+    else:
+      commands.add(commandAst)
+
+  result = some(makeNode(statementNode, commands))
+
+
+# ## Node Execution ## #
 proc execCommandNode(vm: CommandantVm, node: AstNode) =
-  # echo "In execCommandNode:"
-  # echo nodeRepr(node, 1)
-  
   # Sanity check
   assert len(node.children) >= 2
   assert node.kind == commandNode
@@ -295,19 +399,33 @@ proc execCommandNode(vm: CommandantVm, node: AstNode) =
     arguments    = commandParts[1..^1]
 
   # Call builtin or command
-  let validCommand = (
-    tryCallBuiltin(vm, executable, arguments, cmdFiles) or
-    tryCallFunction(vm, executable, arguments, cmdFiles) or
-    tryCallExecutable(vm, executable, arguments, cmdFiles) 
-  )
-
-  # Handle invalid command
-  if not validCommand:
-    vm.lastExitCode = "1"
-    handleInvalidCommand(vm, executable, arguments, cmdFiles)
+  tryCallCommand(vm, executable, arguments, cmdFiles)
 
 
-# ## Seperator Execution ## #
+proc execStatement(vm: CommandantVm, node: AstNode) =
+  # Sanity check
+  assert len(node.children) >= 2
+  assert node.kind == statementNode
+
+  let
+    statement = node.children[0]
+    commands  = node.children[1..^1]
+
+  # Handle command redirection
+  let cmdFiles = getCommandFiles(statement.children[0])
+  defer:
+    closeCommandFiles(cmdFiles)
+
+  # Build command string
+  let
+    commandParts = toSeq(termsData(statement))
+    executable   = commandParts[0]
+    arguments    = commandParts[1..^1]
+
+  # Call builtin or command
+  discard tryCallStatement(vm, executable, arguments, commands, cmdFiles)
+
+
 proc execSeperatorNode(vm: CommandantVm, node: AstNode) =
   # echo "In execSeperatorNode:"
   # echo nodeRepr(node, 1)
@@ -330,12 +448,28 @@ proc execSeperatorNode(vm: CommandantVm, node: AstNode) =
 
 # ## Root Execution ## #
 proc execNode*(vm: CommandantVm, node: AstNode) =
-  # echo "In execNode:"
-  # echo nodeRepr(node, 1)
-
   case node.kind
   of commandNode:
     execCommandNode(vm, node)
+  of seperatorNode:
+    execSeperatorNode(vm, node)
+  of expressionNode:
+    for child in node.children:
+      execNode(vm, node)
+  else:
+    raise newException(ValueError, "Invalid node to execute.")
+
+
+proc execLine*(vm: CommandantVm, node: AstNode) =
+  case node.kind
+  of commandNode:
+    let statementOpt = tryProcessingStatement(vm, node)
+    if isSome(statementOpt):
+      execStatement(vm, get(statementOpt))
+    else:
+      execCommandNode(vm, node)
+  of statementNode:
+    execStatement(vm, node)
   of seperatorNode:
     execSeperatorNode(vm, node)
   of expressionNode:
