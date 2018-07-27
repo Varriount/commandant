@@ -5,7 +5,7 @@
 ## and the builtin routines.
 ## 
 import parser, lexer, tables, strutils, strformat, os
-import parseutils, sequtils
+import parseutils, sequtils, pegs
 
 import regex except Option
 # ## Builtin Implementations ## #

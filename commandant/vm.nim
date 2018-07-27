@@ -160,6 +160,10 @@ proc `lastExitCode`*(vm: CommandantVm): string {.inline.} =
   result = get(getVar(vm, "lastExitCode"))[0]
 
 
+# Variable Substition Procedures
+
+
+
 # ## Execution Procedures ## #
 proc tryCallCommand(
     vm        : CommandantVm,
@@ -382,6 +386,46 @@ proc tryProcessingStatement(vm: CommandantVm, node: AstNode): Option[AstNode] =
 
 
 # ## Node Execution ## #
+let varPeg = peg"'$' { [a-zA-Z_0-9]+ } ( '[' { [0-9]+ } ']' )?"
+
+proc processCommandLine(vm: CommandantVm, node: AstNode): seq[string] =
+  result = @[]
+
+  proc sub(match: int; cnt: int; caps: openArray[string]): string =
+    result = ""
+
+    let variableOpt = getVar(vm, caps[0])
+    if isNone(variableOpt):
+      return ""
+
+    var variable = variableOpt.get()
+    if caps[1] == "":
+      return join(variable, "")
+
+    var index = -1
+    if parseInt(caps[1], index) == -1:
+      return ""
+
+    if high(variable) < index or index < low(variable):
+      return ""
+    
+    result = variable[index]
+
+
+  for i in 1..high(node.children):
+    let
+      term = node.children[i].term
+      parts = replace(term.data, varPeg, sub)
+
+    case term.kind
+    of wordToken:
+      add(result, split(parts))
+    of strToken:
+      add(result, parts)
+    else:
+      raise newException(ValueError, "Invalid AST")
+
+
 proc execCommandNode(vm: CommandantVm, node: AstNode) =
   # Sanity check
   assert len(node.children) >= 2
@@ -394,7 +438,7 @@ proc execCommandNode(vm: CommandantVm, node: AstNode) =
 
   # Build command string
   let
-    commandParts = toSeq(termsData(node))
+    commandParts = processCommandLine(vm, node)
     executable   = commandParts[0]
     arguments    = commandParts[1..^1]
 
