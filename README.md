@@ -104,9 +104,29 @@ Variable substitution is performed by using the expressions `$var` or
 substitution, while $var[x] will substitute only that element.
 
 
-Notes:
+# Notes: #
 
 This project was mainly about learning how command shells ran. I learned quite
 a bit about parsers (such as the different methods for implementing operator
 precedence) as well as how bash works internally. Some of the key implementation
 difference I made from bash was using dynamic arrays, instead of linked lists.
+
+
+# Compilation Instructions #
+This program requires the development version of [Nim](https://github.com/nim-lang/Nim).
+
+```
+# Download development branch
+git clone git://github.com/nim-lang/Nim.git
+cd Nim
+
+# Download csources for bootstrapping
+git clone --depth 1 git://github.com/nim-lang/csources
+cd csources && sh build.sh
+
+cd ..
+bin/nim c koch
+./koch boot -d:release
+```
+
+You may then symlink the resulting executable into your bin directory.
