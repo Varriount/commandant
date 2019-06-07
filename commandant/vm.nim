@@ -375,7 +375,7 @@ proc tryProcessingStatement(vm: CommandantVm, node: AstNode): Option[AstNode] =
     let commandAst = commandAstOpt.get()
     if isEndCommand(commandAst):
       break
-    
+
     let subStatement = tryProcessingStatement(vm, commandAst)
     if isSome(subStatement):
       commands.add(get(subStatement))
