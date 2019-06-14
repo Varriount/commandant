@@ -55,13 +55,13 @@ proc lexExample(parser: ref Parser): Node =
     else:
       raise Exception()
 ]#
-proc lexCommand(parser: ref Parser): Node
-proc lexString(parser: ref Parser): Node
-proc lexVariableSub(parser: ref Parser): Node
-proc lexCommandSub(parser: ref Parser): Node
+proc lexCommand*(parser: ref Parser): Node {.gcsafe.}
+proc lexString(parser: ref Parser): Node {.gcsafe.}
+proc lexVariableSub(parser: ref Parser): Node {.gcsafe.}
+proc lexCommandSub(parser: ref Parser): Node {.gcsafe.}
 
 
-proc lexCommand(parser: ref Parser): Node =
+proc lexCommand*(parser: ref Parser): Node =
   result = Node(kind: NKCommand)
 
   while true:
@@ -165,7 +165,7 @@ proc lexCommandSub(parser: ref Parser): Node =
       raise newException(Exception, "88")
 
 
-proc reprTree(node: Node, indent = 0) =
+proc reprTree*(node: Node, indent = 0) =
   let space = repeat(' ', indent)
   echo fmt"{space}{node.kind}:"
   echo fmt"{space}    unlinked: {node.unlinked}"
@@ -178,11 +178,3 @@ proc reprTree(node: Node, indent = 0) =
     echo fmt"{space}    children: "
     for child in node.children:
       reprTree(child, indent + 8)
-
-
-var parser: ref Parser
-new(parser)
-
-parser.parse("  hello world[[here]] \"here((there))\"   ")
-echo(repr(parser.tokens))
-reprTree(parser.lexCommand())

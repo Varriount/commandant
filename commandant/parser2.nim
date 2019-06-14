@@ -4,6 +4,8 @@ import strformat
 type
   TokenKind* = enum
     TKInvalid
+    TKSeperator
+    TKRedirect
     TKCommand
     TKSpaces
     TKWord
@@ -36,6 +38,11 @@ proc initParser*(): Parser =
   result = Parser()
 
 
+proc clear(parser: ref Parser) =
+  parser.position = 0
+  setLen(parser.tokens, 0)
+
+
 proc parse*(parser: ref Parser, input: string) =
   var lineNumber   = 1
   var linePosition = 0
@@ -57,7 +64,7 @@ proc parse*(parser: ref Parser, input: string) =
     parser.tokens[^1].data = capture[0].s
 
   let parser = peg "COMMANDS":
-    COMMANDS <- COMMAND * >( EOF ):
+    COMMANDS <- COMMAND * *( SEPERATOR_LIT * COMMAND ) * >( EOF ):
       addMarkerToken(TKEof)
 
     COMMAND <- +(
@@ -68,11 +75,19 @@ proc parse*(parser: ref Parser, input: string) =
       # Literals
       DQ_STRING_LIT |
       SQ_STRING_LIT |
+      # Other
+      REDIRECT_LIT  |
       WORD_LIT
     )
 
+    SEPERATOR_LIT <- >SEPERATOR_SYM :
+      addDataToken(TKSeperator)
+
     SPACES <- >( +AltSpace ) :
       addMarkerToken(TKSpaces)
+
+    REDIRECT_LIT <- >REDIRECT_SYM :
+      addDataToken(TKRedirect)
 
     # Words
     WORD_LIT <- >( +WORD_CHAR ) :
