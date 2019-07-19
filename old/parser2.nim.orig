@@ -1,5 +1,5 @@
-import strformat
 import npeg
+import strformat
 
 type
   TokenKind* = enum
@@ -29,55 +29,62 @@ type
     data* : string
     loc*  : LineInfo
 
-  Lexer* = ref object
+  Parser* = ref object
     tokens*   : seq[Token]
     position* : int
 
 
-proc newLexer*(): Lexer =
-  result = Lexer()
+proc initParser*(): Parser =
+  result = Parser()
 
 
-proc resetLexer*(lexer: Lexer) =
-  setLen(lexer.tokens, 0)
-  lexer.position = 0
+<<<<<<< Updated upstream
+proc clear(parser: ref Parser) =
+  parser.position = 0
+  setLen(parser.tokens, 0)
 
 
-proc hasNext*(lexer: Lexer): bool =
-  result = lexer.position < len(lexer.tokens)
+proc parse*(parser: ref Parser, input: string) =
+=======
+proc resetParser*(parser: Parser) =
+  setLen(parser.tokens, 0)
+  parser.position = 0
 
 
-proc next*(lexer: Lexer) =
-  inc lexer.position
+proc hasNext*(parser: Parser): bool =
+  result = parser.position < len(parser.tokens)
 
 
-proc token*(lexer: Lexer): Token =
-  result = lexer.tokens[lexer.position]
+proc next*(parser: Parser): Token =
+  result = parser.tokens[parser.position]
+  inc parser.position
 
 
-proc skip*(lexer: Lexer, kind: TokenKind) =
-  while true:
-    let token = lexer.token()
+proc skip*(parser: Parser, kind: TokenKind) =
+  while parser.hasNext():
+    let token = parser.tokens[parser.position]
 
     if token.kind != kind:
+      echo repr(token)
       break
-    lexer.next()
+    inc parser.position
 
 
-proc expect*(lexer: Lexer, kind: TokenKind): Token =
-  result = lexer.token()
+proc expect*(parser: Parser, kind: TokenKind): Token =
+  result = parser.next()
   if result.kind != kind:
     raise newException(Exception, fmt"Expected {kind}, got {result.kind}.")
 
 
-proc lex*(lexer: Lexer, input: string) =
+proc parse*(parser: Parser, input: string) =
+>>>>>>> Stashed changes
   var lineNumber   = 1
   var linePosition = 0
 
   template addMarkerToken(tkind: TokenKind) =
     let position = capture[0].si
 
-    lexer.tokens.add(Token(
+    parser.tokens.add(Token(
       kind: tkind,
       loc : LineInfo(
         position: position,
@@ -88,12 +95,10 @@ proc lex*(lexer: Lexer, input: string) =
 
   template addDataToken(tkind: TokenKind) =
     addMarkerToken(tkind)
-    lexer.tokens[^1].data = capture[0].s
+    parser.tokens[^1].data = capture[0].s
 
-  let lexer = peg "COMMANDS":
-    COMMANDS <- COMMAND * *( SEPERATOR_LIT * COMMAND ) * (EndOfInput | &COMMAND_SUB_END_SYM)
-
-    EndOfInput <- >( EOF ):
+  let parser = peg "COMMANDS":
+    COMMANDS <- COMMAND * *( SEPERATOR_LIT * COMMAND ) * >( EOF ):
       addMarkerToken(TKEof)
 
     COMMAND <- +(
@@ -109,13 +114,13 @@ proc lex*(lexer: Lexer, input: string) =
       WORD_LIT
     )
 
-    SEPERATOR_LIT <- >( SEPERATOR_SYM ) :
+    SEPERATOR_LIT <- >SEPERATOR_SYM :
       addDataToken(TKSeperator)
 
     SPACES <- >( +AltSpace ) :
       addMarkerToken(TKSpaces)
 
-    REDIRECT_LIT <- >( REDIRECT_SYM ) :
+    REDIRECT_LIT <- >REDIRECT_SYM :
       addDataToken(TKRedirect)
 
     # Words
@@ -131,8 +136,7 @@ proc lex*(lexer: Lexer, input: string) =
       VARIABLE_SUB_END_SYM   |
       # Literals
       DQ_STRING_START_SYM    |
-      SQ_STRING_START_SYM    |
-      SEPERATOR_SYM
+      SQ_STRING_START_SYM
     )
 
 
@@ -155,15 +159,15 @@ proc lex*(lexer: Lexer, input: string) =
       DQ_STRING_DATA
     )
 
-    DQ_STRING_DATA <- >( +(ANY - (
+    DQ_STRING_DATA <- >(+(ANY - (
       COMMAND_SUB_START_SYM  |
       VARIABLE_SUB_START_SYM |
       DQ_STRING_ESCAPE_SYM   |
       DQ_STRING_END_SYM
-    )) ):
+    ))):
       addDataToken(TKStringData)
 
-    DQ_STRING_ESCAPE <- >( DQ_STRING_ESCAPE_SYM ) :
+    DQ_STRING_ESCAPE <- DQ_STRING_ESCAPE_SYM:
       addDataToken(TKStringEscape)
 
     DQ_STRING_ESCAPE_SYM <- '\\' * >(
@@ -172,7 +176,7 @@ proc lex*(lexer: Lexer, input: string) =
       VARIABLE_SUB_START_SYM |
       CHAR_ESCAPE            |
       UTF8_ESCAPE
-    ) :
+    ):
       addDataToken(TKStringEscape)
 
 
@@ -182,10 +186,10 @@ proc lex*(lexer: Lexer, input: string) =
       SQ_STRING_MIDDLE  *
       SQ_STRING_END
 
-    SQ_STRING_START <- >( SQ_STRING_START_SYM ) :
+    SQ_STRING_START <- SQ_STRING_START_SYM :
       addMarkerToken(TKStringStart)
 
-    SQ_STRING_END <- >( SQ_STRING_END_SYM | E_MISSING_QUOTE ) :
+    SQ_STRING_END <- SQ_STRING_END_SYM | E_MISSING_QUOTE :
       addMarkerToken(TKStringEnd)
 
     SQ_STRING_MIDDLE <- *(
@@ -193,16 +197,16 @@ proc lex*(lexer: Lexer, input: string) =
       SQ_STRING_DATA
     )
 
-    SQ_STRING_DATA <- >+( ANY - (
+    SQ_STRING_DATA <- >+(ANY - (
       SQ_STRING_ESCAPE_SYM |
       SQ_STRING_END_SYM
-    ) ) :
+    )):
       addDataToken(TKStringData)
 
-    SQ_STRING_ESCAPE <- >( SQ_STRING_ESCAPE_SYM ):
+    SQ_STRING_ESCAPE <- SQ_STRING_ESCAPE_SYM:
       addDataToken(TKStringEscape)
 
-    SQ_STRING_ESCAPE_SYM <- '\\' * (
+    SQ_STRING_ESCAPE_SYM <- '\\' * >(
       SQ_STRING_END_SYM |
       CHAR_ESCAPE       |
       UTF8_ESCAPE
@@ -221,7 +225,7 @@ proc lex*(lexer: Lexer, input: string) =
     COMMAND_SUB_END <- >( COMMAND_SUB_END_SYM ) | E_MISSING_CBRACE :
       addMarkerToken(TKCommandSubEnd)
 
-    COMMAND_SUB_DATA <- COMMANDS | E_INVALID_SUB
+    COMMAND_SUB_DATA <- COMMAND | E_INVALID_SUB
 
 
     # Variable Substitutions
@@ -280,12 +284,7 @@ proc lex*(lexer: Lexer, input: string) =
     E_MISSING_PAREN  <- E"Missing parenthesis."
     E_INVALID_SUB    <- E"Invalid substitution."
 
-  let res = lexer.match(input)
+  let res = parser.match(input)
   if res.matchLen != len(input):
     echo "Warning, unable to tokenize entire output."
     echo fmt"End of match occured around {res.matchLen} and {res.matchMax}"
-
-
-proc getPrecedence*(t: Token): int =
-  if t.data == "|":
-    result = 1

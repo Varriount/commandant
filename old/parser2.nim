@@ -29,7 +29,7 @@ type
     data* : string
     loc*  : LineInfo
 
-  Parser* = object
+  Parser* = ref object
     tokens*   : seq[Token]
     position* : int
 
@@ -38,12 +38,41 @@ proc initParser*(): Parser =
   result = Parser()
 
 
-proc clear(parser: ref Parser) =
-  parser.position = 0
+proc resetParser*(parser: Parser) =
   setLen(parser.tokens, 0)
+  parser.position = 0
 
 
-proc parse*(parser: ref Parser, input: string) =
+proc hasNext*(parser: Parser): bool =
+  result = parser.position < len(parser.tokens)
+
+
+proc next*(parser: Parser): Token {.discardable.} =
+  result = parser.current()
+  inc parser.position
+
+
+proc current*(parser: Parser): Token =
+  result = parser.tokens[parser.position]
+
+
+proc skip*(parser: Parser, kind: TokenKind) =
+  while parser.hasNext():
+    let token = parser.tokens[parser.position]
+
+    if token.kind != kind:
+      echo repr(token)
+      break
+    inc parser.position
+
+
+proc expect*(parser: Parser, kind: TokenKind): Token =
+  result = parser.current()
+  if result.kind != kind:
+    raise newException(Exception, fmt"Expected {kind}, got {result.kind}.")
+
+
+proc parse*(parser: Parser, input: string) =
   var lineNumber   = 1
   var linePosition = 0
 
@@ -256,26 +285,6 @@ proc parse*(parser: ref Parser, input: string) =
     echo fmt"End of match occured around {res.matchLen} and {res.matchMax}"
 
 
-proc hasNext*(parser: ref Parser): bool =
-  result = parser.position < len(parser.tokens)
-
-
-proc next*(parser: ref Parser): Token =
-  result = parser.tokens[parser.position]
-  inc parser.position
-
-
-proc skip*(parser: ref Parser, kind: TokenKind) =
-  while parser.hasNext():
-    let token = parser.tokens[parser.position]
-
-    if token.kind != kind:
-      echo repr(token)
-      break
-    inc parser.position
-
-
-proc expect*(parser: ref Parser, kind: TokenKind): Token =
-  result = parser.next()
-  if result.kind != kind:
-    raise newException(Exception, fmt"Expected {kind}, got {result.kind}.")
+proc getPrecedence*(t: Token): int =
+  if token.data == '|':
+    result = 1

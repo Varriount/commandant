@@ -1,253 +1,235 @@
-import lexer, strformat
+import strutils, strformat
+import lexer
 
-#[
-# Node Expressions
-expression  <- if_stmt | for_stmt | while_stmt
-commands    <- command [ SEPERATOR_LIT command ]*
-command     <- ( WORD_LIT | STRING_LIT | redirection )+
-redirection <- REDIRECT_LIT ( word | string )
-if_stmt     <- "if"    LPAREN_LIT commands RPARENT_LIT () END_LIT
-while_stmt  <- "while" LPAREN_LIT commands RPARENT_LIT () END_LIT
-for_stmt    <- "for" WORD_LIT "in" LPAREN_LIT commands RPARENT_LIT () END_LIT
-
-# Token expressions
-WORD_LIT      <- \[^\s\t]\
-STRING_LIT    <- \"(\\.|[^"\\])*"\
-SEPERATOR_LIT <- ( "||" | "&&" )
-REDIRECT_LIT  <- ( ">" | ">>" | "!>" | "!>>" | "<" )
-LPAREN_LIT    <- "("
-RPAREN_LIT    <- ")"
-END_LIT       <- "end"
-]#
-
-# ## AstNode Implementation ## #
 type
-  AstNodeKind* = enum
-    emptyNode
-    termNode
-    expressionNode
-    statementNode
-    commandNode
-    seperatorNode
-    outputNode
+  NodeKind* = enum
+    NKInvalid
+    NKSeperator
+    NKRedirect
+    NKCommand
+    NKWord
+    NKString
+    NKStringData
+    NKCommandSub
+    NKVariableSub
+    NKEof
 
-  AstNode* = object
-    case kind*: AstNodeKind
-    of termNode:
-      term*: Token
+  Node* = object
+    token*: Token
+    unlinked*: bool
+
+    case kind*: NodeKind
+    of NKWord, NKStringData:
+      discard
     else:
-      children*: seq[AstNode]
+      children*: seq[Node]
 
 
-template makeNode*(nodeKind: static[AstNodeKind], nodeValue): AstNode =
-  when nodeKind == termNode:
-    AstNode(kind: nodeKind, term: nodeValue)
-  else:
-    AstNode(kind: nodeKind, children: nodeValue)
-    
-
-template addNewNode*(parent: AstNode, kind: static[AstNodeKind], value) =
-  parent.children.add(makeNode(kind, value))
-
-
-template add*(parent: AstNode, child: AstNode) =
+proc add(parent: var Node, child: Node) =
   parent.children.add(child)
 
 
-iterator terms*(node: AstNode): Token =
-  assert node.kind == commandNode
-  for i in 1..high(node.children):
-    yield node.children[i].term
+#[
+proc parseExample(lexer: Lexer): Node =
+  result = Node(kind: RootKind)
 
+  while lexer.hasNext():
+    let token = lexer.token()
 
-iterator termsData*(node: AstNode): string =
-  assert node.kind == commandNode
-  for term in node.terms:
-    yield term.data
-
-
-proc makeTermNode(nodeValue: string|Token): AstNode =
-  when nodeValue is string:
-    makeNode(termNode, Token(kind: strToken, data: nodeValue, position: 0))
-  else:
-    makeNode(termNode, nodeValue)
-
-
-proc skipTypes*(node: AstNode, kinds: set[AstNodeKind]): AstNode =
-  result = node
-  while result.kind in kinds:
-    result = result.children[^1]
-
-
-# ## Parser Implementation ## #
-type
-  Parser* = ref object
-    lexer*: Lexer
-    token*: Token
-    errorFound*: bool
-
-
-proc newParser*(): Parser =
-  new(result)
-  initLexer(result.lexer)
-  initToken(result.token)
-
-
-proc readToken(parser: var Parser) =
-  nextToken(parser.lexer, parser.token)
-
-
-# template matchTokenExpr(
-#       parser: Parser,
-#       matchExpr: string): Token =
-#   let
-#     token {.inject.} = parser.token 
-#     data {.inject.} = parser.token.data
-#     kind {.inject.} = parser.token.kind
-
-#   if matchExpr:
-#     result = parser.token
-#   else:
-#     initToken(result)
-
-
-# proc matchToken(
-#       parser        : Parser,
-#       expectedKind  : TokenKind,
-#       expectedData  : string): Option[Token] =
-#   result = matchTokenExpr(
-#     expectedKind == kind
-#     expectedData == data
-#   )
-
-
-# proc matchToken(
-#       parser: Parser,
-#       data  : string,
-#       kind  : TokenKind): Token =
-#   result = matchTokenExpr(
-#     expectedKind == kind
-#     expectedData == data
-#   )
-
-
-# proc matchToken(
-#       parser: Parser,
-#       data  : string): Token =
-#   result = matchTokenExpr(expectedData == data)
-
-
-# proc matchToken(
-#       parser: Parser,
-#       kind  : TokenKind): Token =
-#   result = matchTokenExpr(expectedKind == kind)
-
-
-proc reportError(parser: var Parser, msg: string) =
-  echo fmt"Error (Column {parser.lexer.position}): ", msg
-  parser.errorFound = true
-
-
-# ## Core Parsing routines ## #
-proc parseCommand(parser: var Parser): AstNode =
-  result = makeNode(
-    commandNode,
-    @[
-      makeNode(outputNode, @[])
-    ]
-  )
-  while true:
-    case parser.token.kind
-    of wordToken, strToken:
-      result.addNewNode(termNode, parser.token)
-
-    of streamOptSet:
-      var streamOptNode = makeNode(commandNode, @[])
-      streamOptNode.addNewNode(termNode, parser.token)
-
-      readToken(parser)
-      streamOptNode.addNewNode(termNode, parser.token)
-      result.children[0].add(streamOptNode)
-
+    case token.kind
+    of TKSpaces:
+      discard
+    of TKWord:
+      discard
+    of TKStringStart:
+      discard
+    of TKStringEnd:
+      discard
+    of TKStringData:
+      discard
+    of TKStringEscape:
+      discard
+    of TKCommandSubStart:
+      discard
+    of TKCommandSubEnd:
+      discard
+    of TKVariableSubStart:
+      discard
+    of TKVariableSubEnd:
+      discard
+    of TKInvalid:
+      discard
     else:
-      break
+      raise Exception()
 
-    readToken(parser)
+    lexer.next()
+]#
+proc parseCommands*(lexer: Lexer, precedenceLimit: int = 0): Node
+proc parseCommand(lexer: Lexer): Node
+proc parseString(lexer: Lexer): Node
+proc parseVariableSub(lexer: Lexer): Node
+proc parseCommandSub(lexer: Lexer): Node
+proc parseRedirect(lexer: Lexer): Node
 
-  if len(result.children) < 2:
-    parser.reportError("Command expected.")
+proc parse*(lexer: Lexer, data: string): Node =
+  resetLexer(lexer)
+  lexer.lex(data)
+  result = parseCommands(lexer)
 
-
-proc parseMultiCommand(parser: var Parser, precedenceLimit: int): AstNode =
-  result = parseCommand(parser)
+proc parseCommands*(lexer: Lexer, precedenceLimit: int = 0): Node =
+  result = parseCommand(lexer)
 
   var
-    opToken = parser.token
-    precedence = getPrecedence(opToken)
+    sepToken = lexer.token
+    precedence = getPrecedence(sepToken)
 
-  while opToken.kind != eofToken and precedence >= precedenceLimit:
-    echo precedence, " : ", precedenceLimit
-    if isLeftAssociative(opToken):
-      inc precedence
+  while sepToken.kind notin {TKEof, TKCommandSubEnd} and
+        precedence >= precedenceLimit:
 
-    readToken(parser)
+    inc precedence
+    lexer.next()
 
     let
-      rightExpression = parseMultiCommand(parser, precedence)
-      leftExpression = result
+      rightCommand = parseCommands(lexer, precedence)
+      leftCommand  = result
 
-    result = makeNode(
-      seperatorNode,
-      @[
-        makeNode(termNode, opToken),
-        leftExpression,
-        rightExpression
+    result = Node(
+      kind: NKSeperator,
+      token: sepToken,
+      children: @[
+        leftCommand,
+        rightCommand
       ]
     )
 
-    opToken = parser.token
-    precedence = getPrecedence(opToken)
+    sepToken = lexer.token
+    precedence = getPrecedence(sepToken)
 
 
-# proc parseDef(parser: var Parser): Optional[AstNode] =
-#   let start = matchToken(parser, wordToken, "if")
-#   if not valid:
-#     return none(AstNode)
+proc parseCommand(lexer: Lexer): Node =
+  result = Node(kind: NKCommand)
 
-#   readToken(parser)
-#   let target 
-#   if not valid:
-#     parser.reportError("Identifier expected.")
-#     return none(AstNode)
+  while true:
+    let token = lexer.token
+
+    case token.kind
+    of TKEof, TKSeperator, TKCommandSubEnd:
+      break
+
+    of TKSpaces:
+      if len(result.children) > 0:
+        result.children[^1].unlinked = true
+
+    of TKWord:
+      result.add(Node(
+        kind: NKWord,
+        token: token
+      ))
+
+    of TKStringStart:
+      result.add(parseString(lexer))
+    of TKCommandSubStart:
+      result.add(parseCommandSub(lexer))
+    of TKVariableSubStart:
+      result.add(parseVariableSub(lexer))
+
+    of TKRedirect:
+      result.add(parseRedirect(lexer))
+
+    else:
+      raise newException(Exception, $token.kind)
+
+    lexer.next()
 
 
-#   let commands = parseMultiCommand(parser, 0)
+proc parseString(lexer: Lexer): Node =
+  result = Node(
+    kind: NKString,
+    token: lexer.token,
+    children: @[]
+  )
+
+  lexer.next() # Skip over string start
+
+  while true:
+    let token = lexer.token
+
+    case token.kind
+    of TKStringEnd:
+      break
+
+    of TKStringData, TKStringEscape:
+      result.add(Node(
+        kind: NKStringData,
+        token: lexer.token
+      ))
+
+    of TKCommandSubStart:
+      result.add(parseCommandSub(lexer))
+    of TKVariableSubStart:
+      result.add(parseVariableSub(lexer))
+
+    else:
+      raise newException(Exception, "118")
+
+    lexer.next()
 
 
-# proc parseIf(parser: var Parser): Optional[AstNode] =
-#   if not parser.expect(wordToken, "if"):
-#     return none(AstNode)
+proc parseVariableSub(lexer: Lexer): Node =
+  result = Node(
+    kind: NKVariableSub,
+    token: lexer.token
+  )
 
-#   let commands = parseMultiCommand(parser, 0)
-
-
-# proc parseWhile(parser: var Parser): Optional[AstNode] =
-#   if not parser.expect(wordToken, "while"):
-#     return none(AstNode)
-
-#   let commands = parseMultiCommand(parser, 0)
-
-
-# proc parseFor(parser: var Parser): Optional[AstNode] =
-#   if not parser.expect(wordToken, "for"):
-#     return none(AstNode)
-
-#   let commands = parseMultiCommand(parser, 0)
+  lexer.next()
+  lexer.skip(TKSpaces)
+  result.add(Node(
+    kind: NKWord,
+    token: lexer.expect(TKWord)
+  ))
+  lexer.next()
+  lexer.skip(TKSpaces)
+  discard lexer.expect(TKVariableSubEnd)
 
 
-proc parse*(parser: var Parser, s: string): AstNode =
-  result = AstNode(kind: emptyNode)
+proc parseCommandSub(lexer: Lexer): Node =
+  result = Node(
+    kind: NKCommandSub,
+    token: lexer.token
+  )
 
-  initLexer(parser.lexer, s)
-  readToken(parser)
-  result = parseMultiCommand(parser, 0)
+  lexer.next()
+  result.add(parseCommands(lexer))
+
+
+proc parseRedirect(lexer: Lexer): Node =
+  result = Node(
+    kind: NKRedirect,
+    token: lexer.token
+  )
+
+  lexer.skip(TKSpaces)
+  let target = lexer.token
+  case target.kind
+  of TKStringData, TKStringEscape:
+    result.add(Node(
+      kind: NKStringData,
+      token: lexer.token
+    ))
+  else:
+    raise newException(Exception, "239")
+
+
+proc nodeRepr*(node: Node, indent = 0) =
+  let space = repeat(' ', indent)
+  echo fmt"{space}{node.kind}:"
+  echo fmt"{space}    unlinked: {node.unlinked}"
+  if  node.token.kind != TKInvalid:
+    echo fmt"{space}    token:"
+    echo fmt"{space}        kind: {node.token.kind}"
+    echo fmt"{space}        data: {node.token.data}"
+    echo fmt"{space}        location: ({node.token.loc.line}, {node.token.loc.column})"
+  if node.kind notin {NKWord, NKStringData} and len(node.children) > 0:
+    echo fmt"{space}    children: "
+    for child in node.children:
+      nodeRepr(child, indent + 8)

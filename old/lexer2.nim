@@ -4,13 +4,13 @@ import strformat
 
 type
   NodeKind = enum
+    NKInvalid
     NKCommand
     NKWord
     NKString
     NKStringData
     NKCommandSub
     NKVariableSub
-    NKInvalid
 
   Node = object
     kind    : NodeKind
@@ -68,7 +68,7 @@ proc lexCommand*(parser: ref Parser): Node =
     let token = parser.next()
 
     case token.kind
-    of TKEof:
+    of TKEof, TKSeperator:
       break
 
     of TKSpaces:
@@ -87,6 +87,9 @@ proc lexCommand*(parser: ref Parser): Node =
       result.add(lexCommandSub(parser))
     of TKVariableSubStart:
       result.add(lexVariableSub(parser))
+
+    of TKRedirect:
+      result.add(lexRedirect(parser))
 
     else:
       raise newException(Exception, "88")

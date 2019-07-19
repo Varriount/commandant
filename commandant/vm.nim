@@ -1,15 +1,14 @@
-import tables, osproc, os, strformat, sequtils, streams, posix
-import strutils
+import tables, osproc, os, strformat, sequtils, streams, posix, strutils
 
-import lexer, parser, subprocess, treeutils, options
+import lexer, parser, subprocess, options, utils
 
 
 type
   VariableMap* = Table[string, seq[string]]
-  FunctionMap* = Table[string, seq[AstNode]]
+  FunctionMap* = Table[string, seq[Node]]
 
   VmInputProc* = proc (
-    vm: CommandantVm,
+    vm: VM,
     output: var string
   ): bool {.closure.}
     ## Used by the VM to retrieve the next line of input.
@@ -21,59 +20,70 @@ type
     of true:
       isFinished: bool
     of false:
-      astBlock*   : seq[AstNode]
+      astBlock*   : seq[Node]
       execIndex*  : int
 
-  CommandantVm* = ref object
-    parser    : Parser
+  VM* = ref object
+    lexer     : Lexer
     inputProc : VmInputProc
     callStack : seq[StackFrame]
     depth     : int
+    signalMask: SigSet
+    childBlock: int
 
 
 # ## Basic VM Procedures ## #
-proc execNode*(vm: CommandantVm, node: AstNode)
-proc execLine*(vm: CommandantVm, node: AstNode)
-proc `lastExitCode=`*(vm: CommandantVm, value: string) {.inline.}
-proc `lastExitCode`*(vm: CommandantVm): string {.inline.}
+proc execNode*(vm: VM, node: Node, pipes: CommandPipes): Pid
+proc execSeperator(vm: VM, node: Node, pipes: CommandPipes): Pid
+proc execCommand(vm: VM, node: Node, pipes: CommandPipes): Pid
+proc `lastExitCode=`*(vm: VM, value: string) {.inline.}
+proc `lastExitCode`*(vm: VM): string {.inline.}
+proc waitOnPID(vm: VM, pid: PID)
 
 
-proc newCommandantVm*(inputProc: VmInputProc): CommandantVm =
+proc newVM*(inputProc: VmInputProc): VM =
   new(result)
-  result.parser    = newParser()
+  result.lexer    = newLexer()
   result.inputProc = inputProc
   result.callStack = @[StackFrame(
     isRoot    : true,
     isFinished: false,
     variables : initTable[string, seq[string]](),
-    functions : initTable[string, seq[AstNode]]()
+    functions : initTable[string, seq[Node]]()
   )]
 
   result.lastExitCode = "0"
+  discard sigEmptySet(result.signalMask);
+  discard sigAddSet(result.signalMask, SIGCHLD);
 
 
-proc nextCommand(vm: CommandantVm): Option[AstNode] =
+proc nextCommand(vm: VM): Option[Node] =
   var line = ""
 
   while line == "":
     let inputOpen = vm.inputProc(vm, line)
     if not inputOpen:
-      return none(AstNode)
+      return none(Node)
 
     line = strip(line)
 
-  result = some(parse(vm.parser, line))
+  result = some(parse(vm.lexer, line))
 
 
-proc runFrame(vm: CommandantVm, frame: StackFrame) =
+proc runFrame(vm: VM, frame: StackFrame) =
   if frame.isRoot:
     let wrappedNode = nextCommand(vm)
     if isNone(wrappedNode):
       frame.isFinished = true
     else:
-      execLine(vm, get(wrappedNode))
+      var pipes = initStandardPipes()
+      defer: close(pipes)
+
+      var pid = execNode(vm, get(wrappedNode), pipes)
+      vm.waitOnPID(pid)
   else:
-    execLine(vm, frame.astBlock[frame.execIndex])
+    var pid = execNode(vm, frame.astBlock[frame.execIndex], initStandardPipes())
+    vm.waitOnPID(pid)
     inc frame.execIndex
 
 
@@ -85,7 +95,7 @@ proc finished(frame: StackFrame): bool =
     return frame.execIndex >= len(frame.astBlock)
 
 
-proc run*(vm: var CommandantVm) =
+proc run*(vm: var VM) =
   while true:
     let frame = vm.callStack[^1]
     runFrame(vm, frame)
@@ -96,8 +106,31 @@ proc run*(vm: var CommandantVm) =
       quit()
 
 
-# ## Variable Procedures ## #
-proc findFuncFrame(vm: CommandantVm, name: string): Option[StackFrame] =
+proc blockChildSignals(vm: var VM) =
+  if vm.childBlock == 0:
+    discard sigprocmask(SIG_BLOCK, vm.signalMask, cast[var SigSet](nil));
+  inc vm.childBlock
+
+
+proc unblockChildSignals(vm: var VM) =
+  dec vm.childBlock
+  if vm.childBlock == 0:
+    discard sigprocmask(SIG_UNBLOCK, vm.signalMask, cast[var SigSet](nil));
+
+
+proc waitOnPID(vm: VM, pid: PID) =
+  var
+    status     = cint(0)
+    waitResult = waitpid(pid, status, 0)
+
+  if pid == -1:
+    raiseOSError(osLastError())
+  elif WIFEXITED(status):
+    vm.lastExitCode = $WEXITSTATUS(status)
+
+
+# ## Variable/Function Procedures ## #
+proc findFuncFrame(vm: VM, name: string): Option[StackFrame] =
   for index in countDown(high(vm.callStack), 0):
     let frame = vm.callStack[index]
     if name in frame.functions:
@@ -105,28 +138,28 @@ proc findFuncFrame(vm: CommandantVm, name: string): Option[StackFrame] =
       break
 
 
-proc setFunc(vm: CommandantVm, name: string, values: seq[AstNode]) =
+proc setFunc(vm: VM, name: string, values: seq[Node]) =
   let frame = vm.callStack[^1]
   frame.functions[name] = values
 
 
-proc getFunc(vm: CommandantVm, name: string): Option[seq[AstNode]] =
+proc getFunc(vm: VM, name: string): Option[seq[Node]] =
   let frame = findFuncFrame(vm, name)
   if isSome(frame):
     result = some(get(frame).functions[name])
 
 
-proc setVar(vm: CommandantVm, name: string, values: seq[string]) =
+proc setVar(vm: VM, name: string, values: seq[string]) =
   let frame = vm.callStack[0]
   frame.variables[name] = values
 
 
-proc setLocalVar(vm: CommandantVm, name: string, values: seq[string]) =
+proc setLocalVar(vm: VM, name: string, values: seq[string]) =
   let frame = vm.callStack[^1]
   frame.variables[name] = values
 
 
-proc findVarFrame(vm: CommandantVm, name: string): Option[StackFrame] =
+proc findVarFrame(vm: VM, name: string): Option[StackFrame] =
   for index in countDown(high(vm.callStack), 0):
     let frame = vm.callStack[index]
     if name in frame.variables:
@@ -134,390 +167,176 @@ proc findVarFrame(vm: CommandantVm, name: string): Option[StackFrame] =
       break
 
 
-proc getVar(vm: CommandantVm, name: string): Option[seq[string]] =
+proc getVar(vm: VM, name: string): Option[seq[string]] =
   let frame = findVarFrame(vm, name)
   if isSome(frame):
     result = some(get(frame).variables[name])
 
 
-proc delVar(vm: CommandantVm, name: string) =
+proc delVar(vm: VM, name: string) =
   let frame = findVarFrame(vm, name)
   if isSome(frame):
     del(get(frame).variables, name)
 
 
-proc hasVar(vm: CommandantVm, name: string): bool =
+proc hasVar(vm: VM, name: string): bool =
   let frame = findVarFrame(vm, name)
   if isSome(frame):
     result = true
 
 
 # Builtin Variable Setters/Getters
-proc `lastExitCode=`*(vm: CommandantVm, value: string) {.inline.} =
+proc `lastExitCode=`*(vm: VM, value: string) {.inline.} =
   setVar(vm, "lastExitCode", @[value])
 
-proc `lastExitCode`*(vm: CommandantVm): string {.inline.} =
+proc `lastExitCode`*(vm: VM): string {.inline.} =
   result = get(getVar(vm, "lastExitCode"))[0]
 
 
-# Variable Substition Procedures
-
-
-
-# ## Execution Procedures ## #
-proc tryCallCommand(
-    vm        : CommandantVm,
-    executable: string,
-    arguments : seq[string],
-    cmdFiles  : CommandFiles
-)
-proc tryCallCommand(
-    vm        : CommandantVm,
-    arguments : seq[string],
-    cmdFiles  : CommandFiles
-)
-
-# Include the modules containing code for executing builtins
-include builtins
-
-# ### Command Execution ### #
-proc tryCallFunction(
-    vm        : CommandantVm,
-    executable: string,
-    arguments : seq[string],
-    cmdFiles   : CommandFiles): bool =
-
-  # Find the frame where the function is defined.
-  var localFrame = vm.callStack[^1]
-  var rootFrame = vm.callStack[0]
-
-  var sourceFrame: StackFrame
-  for frame in [localFrame, rootFrame]:
-    if executable in frame.functions:
-      sourceFrame = frame
-      result = true
-
-  if not result:
-    return result
-
-  # Retrieve the function AST, create a new stack frame, then execute.
-  var functionFrame = StackFrame(
-    isRoot   : false,
-    execIndex: 0,
-    astBlock : sourceFrame.functions[executable],
-    variables: initTable[string, seq[string]](),
-    functions: initTable[string, seq[AstNode]]()
-  )
-
-  add(vm.callStack, functionFrame)
-
-
-proc tryCallStatement(
-    vm        : CommandantVm,
-    executable: string,
-    arguments : seq[string],
-    commands  : seq[AstNode],
-    cmdFiles  : CommandFiles): bool =
-  let statement = getStatement(executable)
-  result = isSome(statement)
-
-  if result:
-    discard get(statement)(
-      vm         = vm, 
-      executable = executable, 
-      arguments  = arguments, 
-      commands   = commands,
-      cmdFiles   = cmdFiles,
-    )
-
-
-proc tryCallBuiltin(
-    vm        : CommandantVm,
-    executable: string,
-    arguments : seq[string],
-    cmdFiles   : CommandFiles): bool =
-  let builtin = getBuiltin(executable)
-  result = isSome(builtin)
-
-  if result:
-    vm.lastExitCode = $get(builtin)(
-      vm         = vm, 
-      executable = executable, 
-      arguments  = arguments, 
-      cmdFiles   = cmdFiles,
-    )
-
-
-proc tryCallExecutable(
-    vm        : CommandantVm,
-    executable: string,
-    arguments : seq[string],
-    cmdFiles  : CommandFiles): bool =
-  let resolvedExe = findExe(executable)
-  if resolvedExe == "":
-    return false
-
-  result = true
-  let process = callExecutable(
-    executable = resolvedExe,
-    arguments  = arguments,
-    cmdFiles   = cmdFiles
-  )
-
-
-proc handleInvalidCommand(
-    vm        : CommandantVm,
-    executable: string,
-    arguments : seq[string],
-    files   : CommandFiles) =
-  vm.lastExitCode = "1"
-
-  if existsDir(executable):
-      echo fmt"'{executable}' is a directory."
-  else:
-    echo fmt"Cannot find command/executable '{executable}'."
-
-
-proc tryCallCommand(
-    vm        : CommandantVm,
-    executable: string,
-    arguments : seq[string],
-    cmdFiles   : CommandFiles) =
-
-  let validCommand = (
-    tryCallBuiltin(vm, executable, arguments, cmdFiles) or
-    tryCallFunction(vm, executable, arguments, cmdFiles) or
-    tryCallExecutable(vm, executable, arguments, cmdFiles) 
-  )
-
-  # Handle invalid command
-  if not validCommand:
-    vm.lastExitCode = "1"
-    handleInvalidCommand(vm, executable, arguments, cmdFiles)
-
-
-proc tryCallCommand(
-    vm        : CommandantVm,
-    arguments : seq[string],
-    cmdFiles  : CommandFiles) =
-  tryCallCommand(vm, arguments[0], arguments[1..^1], cmdFiles)
-
-
-proc openFileToken(fileToken: Token, mode: FileMode): File =
-  case fileToken.kind
-  of strToken:
-    result = open(fileToken.data, mode)
-  of wordToken:
-    var sourceHandle, destHandle: FileHandle
-    case fileToken.data:
-    of "stdout":
-      result = stdout
-    of "stderr":
-      result = stderr
-    of "stdin":
-      result = stdin
-    else:
-      result = open(fileToken.data, mode)
-  else:
-    raise newException(ValueError, "openFile: Invalid file token.")
-
-
-proc getCommandFiles*(node: AstNode): CommandFiles =
-  assert node.kind == outputNode
-  initCommandFiles(result)
-
-  for child in node.children:
-    let
-      operatorKind = child.children[0].term.kind
-      fileToken = child.children[1].term
-
-    template setCmdFile(member, mode) =
-      discard close(result.member)
-      result.member = openFileToken(fileToken, mode)
-
-    case operatorKind
-    of stdoutToken   : setCmdFile(output, fmWrite)
-    of stdoutAppToken: setCmdFile(output, fmAppend)
-    of stderrToken   : setCmdFile(errput, fmWrite)
-    of stderrAppToken: setCmdFile(errput, fmAppend)
-    of stdinToken    : setCmdFile(input,  fmRead)
-    else:
-      raise newException(ValueError, "Unexpected output token.")
-
-
 # ## AST Preprocessing ## #
-proc isEndCommand(commandAst: AstNode): bool =
-  result = (
-    commandAst.kind == commandNode and
-    len(commandAst.children) == 2  and
-    commandAst.children[1].term.data == "end"
-  )
+proc resolveString(vm: VM, node: Node, pipes: CommandPipes, result: var string)
+proc resolveCommandSub(vm: VM, node: Node, pipes: CommandPipes, result: var string)
+proc resolveVariableSub(vm: VM, node: Node, pipes: CommandPipes, result: var string)
 
 
-proc isStatement(commandAst: AstNode): bool =
-  result = (
-    commandAst.kind == commandNode and
-    isSome(getStatement(commandAst.children[1].term.data))
-  )
+proc execNode(vm: VM, node: Node, pipes: CommandPipes): Pid = 
+  case node.kind
+  of NKCommand:
+    result = execCommand(vm, node, pipes)
+  of NKSeperator:
+    result = execSeperator(vm, node, pipes)
+  else:
+    raise newException(Exception, fmt"Bad node: {node.kind}")
 
-
-proc tryProcessingStatement(vm: CommandantVm, node: AstNode): Option[AstNode] =
-  if not isStatement(node):
-    return
-
-  var commands = @[node]
-  while true:
-    let commandAstOpt = vm.nextCommand()
-    if isNone(commandAstOpt):
-      echo "Invalid statement: EOF reached."
-      return
-
-    let commandAst = commandAstOpt.get()
-    if isEndCommand(commandAst):
-      break
-
-    let subStatement = tryProcessingStatement(vm, commandAst)
-    if isSome(subStatement):
-      commands.add(get(subStatement))
-    else:
-      commands.add(commandAst)
-
-  result = some(makeNode(statementNode, commands))
-
-
-# ## Node Execution ## #
-let varPeg = peg"'$' { [a-zA-Z_0-9]+ } ( '[' { [0-9]+ } ']' )?"
-
-proc processCommandLine(vm: CommandantVm, node: AstNode): seq[string] =
-  result = @[]
-
-  proc sub(match: int; cnt: int; caps: openArray[string]): string =
-    result = ""
-
-    let variableOpt = getVar(vm, caps[0])
-    if isNone(variableOpt):
-      return ""
-
-    var variable = variableOpt.get()
-    if caps[1] == "":
-      return join(variable, "")
-
-    var index = -1
-    if parseInt(caps[1], index) == -1:
-      return ""
-
-    if high(variable) < index or index < low(variable):
-      return ""
-    
-    result = variable[index]
-
-
-  for i in 1..high(node.children):
-    let
-      term = node.children[i].term
-      parts = replace(term.data, varPeg, sub)
-
-    case term.kind
-    of wordToken:
-      add(result, split(parts))
-    of strToken:
-      add(result, parts)
-    else:
-      raise newException(ValueError, "Invalid AST")
-
-
-proc execCommandNode(vm: CommandantVm, node: AstNode) =
-  # Sanity check
-  assert len(node.children) >= 2
-  assert node.kind == commandNode
-
-  # Handle command redirection
-  let cmdFiles = getCommandFiles(node.children[0])
-  defer:
-    closeCommandFiles(cmdFiles)
-
-  # Build command string
-  let
-    commandParts = processCommandLine(vm, node)
-    executable   = commandParts[0]
-    arguments    = commandParts[1..^1]
-
-  # Call builtin or command
-  tryCallCommand(vm, executable, arguments, cmdFiles)
-
-
-proc execStatement(vm: CommandantVm, node: AstNode) =
-  # Sanity check
-  assert len(node.children) >= 2
-  assert node.kind == statementNode
-
-  let
-    statement = node.children[0]
-    commands  = node.children[1..^1]
-
-  # Handle command redirection
-  let cmdFiles = getCommandFiles(statement.children[0])
-  defer:
-    closeCommandFiles(cmdFiles)
-
-  # Build command string
-  let
-    commandParts = toSeq(termsData(statement))
-    executable   = commandParts[0]
-    arguments    = commandParts[1..^1]
-
-  # Call builtin or command
-  discard tryCallStatement(vm, executable, arguments, commands, cmdFiles)
-
-
-proc execSeperatorNode(vm: CommandantVm, node: AstNode) =
-  # echo "In execSeperatorNode:"
-  # echo nodeRepr(node, 1)
-  
-  execNode(vm, node.children[1])
-
-  let seperatorKind = node.children[0].term.kind
-  case seperatorKind
-  of andSepToken:
+proc execSeperator(vm: VM, node: Node, pipes: CommandPipes): Pid =
+  case node.token.data
+  of "&&":
+    result = execNode(vm, node.children[0], pipes)
+    vm.waitOnPID(result)
     if vm.lastExitCode == "0":
-      execNode(vm, node.children[2])
-  of orSepToken:
+      result = execNode(vm, node.children[1], pipes)
+
+  of "||":
+    result = execNode(vm, node.children[0], pipes)
+    vm.waitOnPID(result)
     if vm.lastExitCode != "0":
-      execNode(vm, node.children[2])
-  of semiSepToken:
-    execNode(vm, node.children[2])
+      discard execNode(vm, node.children[1], pipes)
+
+  of ";":
+    discard execNode(vm, node.children[0], pipes)
+    discard execNode(vm, node.children[1], pipes)
+
+  of "|":
+    var 
+      leftPipes      = duplicate(pipes)
+      rightPipes     = duplicate(pipes)
+      connectingPipe = initPipe()
+
+    defer:
+      close(leftPipes)
+      close(rightPipes)
+      close(connectingPipe)
+
+    swap(leftPipes.output.writeEnd, connectingPipe.writeEnd)
+    swap(rightPipes.input.readEnd, connectingPipe.readEnd)
+    
+    discard execNode(vm, node.children[0], leftpipes)
+    discard execNode(vm, node.children[1], rightpipes)
   else:
-    raise newException(ValueError, "Unexpected node")
+    raise newException(Exception, "Bad seperator")
 
 
-# ## Root Execution ## #
-proc execNode*(vm: CommandantVm, node: AstNode) =
-  case node.kind
-  of commandNode:
-    execCommandNode(vm, node)
-  of seperatorNode:
-    execSeperatorNode(vm, node)
-  of expressionNode:
-    for child in node.children:
-      execNode(vm, node)
-  else:
-    raise newException(ValueError, "Invalid node to execute.")
+proc execCommand(vm: VM, node: Node, pipes: CommandPipes): Pid =
+  var arguments: seq[string]
 
+  var unlinked = true
+  for index, child in node.children:
+    if unlinked:
+      arguments.add("")
+    unlinked = child.unlinked
 
-proc execLine*(vm: CommandantVm, node: AstNode) =
-  case node.kind
-  of commandNode:
-    let statementOpt = tryProcessingStatement(vm, node)
-    if isSome(statementOpt):
-      execStatement(vm, get(statementOpt))
+    case child.kind
+    of NKWord:
+      arguments[^1].add(child.token.data)
+    of NKString:
+      resolveString(vm, child, pipes, arguments[^1])
+    of NKCommandSub:
+      resolveCommandSub(vm, child, pipes, arguments[^1])
+    of NKVariableSub:
+      resolveVariableSub(vm, child, pipes, arguments[^1])
     else:
-      execCommandNode(vm, node)
-  of statementNode:
-    execStatement(vm, node)
-  of seperatorNode:
-    execSeperatorNode(vm, node)
-  of expressionNode:
-    for child in node.children:
-      execNode(vm, node)
-  else:
-    raise newException(ValueError, "Invalid node to execute.")
+      raise newException(Exception, fmt"Bad node: {child.kind}")
+
+  echo repr(arguments)
+  result = spawnProcess(arguments, pipes)
+
+
+proc modRedirect(vm: VM, node: Node) =
+  discard
+
+
+proc resolveString(vm: VM, node: Node, pipes: CommandPipes, result: var string) =
+  for child in node.children:
+    case child.kind
+    of NKStringData:
+      add(result, child.token.data)
+    of NKVariableSub:
+      resolveVariableSub(vm, child, pipes, result)
+    of NKCommandSub:
+      resolveCommandSub(vm, child, pipes, result)
+    else:
+      raise newException(Exception, fmt"Bad node: {child.kind}")
+
+
+proc resolveCommandSub(vm: VM, node: Node, pipes: CommandPipes, result: var string) =
+  # Setup the pipes
+  var
+    connectingPipe = initPipe()
+    subPipes       = duplicate(pipes)
+
+  defer:
+    close(connectingPipe)
+    close(subPipes)
+
+  swap(subPipes.output.writeEnd, connectingPipe.writeEnd)
+
+  # Spawn the subprocess
+  var pid = execCommand(vm, node.children[0], subPipes)
+  closeEnd(subPipes.output.writeEnd)
+
+  # Read the output
+  var buffer: array[128, char]
+
+  while true:
+    let readCount = read(
+      connectingPipe.readEnd, # File descriptor
+      addr buffer[0],         # Buffer address
+      128                     # Buffer length
+    )
+
+    if readCount == 0:
+      break
+    elif readCount == -1:
+      raiseOSError(osLastError())
+
+    for i in 0..(readCount - 1):
+      result.add(buffer[i])
+  
+  vm.waitOnPID(pid)
+
+
+proc resolveVariableSub(vm: VM, node: Node, pipes: CommandPipes, result: var string) =
+  let
+    variableWord = node.children[0].token.data
+    variableOpt  = getVar(vm, variableWord)
+
+  if not isNone(variableOpt):
+    let variable = variableOpt.get()
+
+    for element in variable:
+      result.add(element)
+      result.add(' ')
+
+    result.setLen(high(result))
+
+
