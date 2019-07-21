@@ -105,7 +105,7 @@ proc lex*(lexer: Lexer, input: string) =
       DQ_STRING_LIT |
       SQ_STRING_LIT |
       # Other
-      REDIRECT_LIT  |
+      REDIRECT_EXPR |
       WORD_LIT
     )
 
@@ -115,8 +115,13 @@ proc lex*(lexer: Lexer, input: string) =
     SPACES <- >( +AltSpace ) :
       addMarkerToken(TKSpaces)
 
+    # Redirection
+    REDIRECT_EXPR <- REDIRECT_LIT * SPACES * REDIRECT_TARGET
+    
     REDIRECT_LIT <- >( REDIRECT_SYM ) :
       addDataToken(TKRedirect)
+
+    REDIRECT_TARGET <- ( DQ_STRING_LIT | SQ_STRING_LIT | WORD_LIT ) | E_MISSING_TARGET
 
     # Words
     WORD_LIT <- >( +WORD_CHAR ) :
@@ -275,10 +280,11 @@ proc lex*(lexer: Lexer, input: string) =
       linePosition = capture[0].si
 
     # Errors
-    E_MISSING_QUOTE  <- E"Missinq quotation mark."
+    E_INVALID_SUB    <- E"Invalid substitution."
     E_MISSING_CBRACE <- E"Missing curly brace."
     E_MISSING_PAREN  <- E"Missing parenthesis."
-    E_INVALID_SUB    <- E"Invalid substitution."
+    E_MISSING_QUOTE  <- E"Missinq quotation mark."
+    E_MISSING_TARGET <- E"Missing redirection target."
 
   let res = lexer.match(input)
   if res.matchLen != len(input):

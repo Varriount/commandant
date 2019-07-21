@@ -70,11 +70,14 @@ proc parseString(lexer: Lexer): Node
 proc parseVariableSub(lexer: Lexer): Node
 proc parseCommandSub(lexer: Lexer): Node
 proc parseRedirect(lexer: Lexer): Node
+proc parseWord(lexer: Lexer): Node
+
 
 proc parse*(lexer: Lexer, data: string): Node =
   resetLexer(lexer)
   lexer.lex(data)
   result = parseCommands(lexer)
+
 
 proc parseCommands*(lexer: Lexer, precedenceLimit: int = 0): Node =
   result = parseCommand(lexer)
@@ -121,10 +124,7 @@ proc parseCommand(lexer: Lexer): Node =
         result.children[^1].unlinked = true
 
     of TKWord:
-      result.add(Node(
-        kind: NKWord,
-        token: token
-      ))
+      result.add(parseWord(lexer))
 
     of TKStringStart:
       result.add(parseString(lexer))
@@ -175,6 +175,13 @@ proc parseString(lexer: Lexer): Node =
     lexer.next()
 
 
+proc parseWord(lexer: Lexer): Node =
+  result = Node(
+    kind: NKWord,
+    token: lexer.expect(TKWord)
+  )
+
+
 proc parseVariableSub(lexer: Lexer): Node =
   result = Node(
     kind: NKVariableSub,
@@ -183,12 +190,12 @@ proc parseVariableSub(lexer: Lexer): Node =
 
   lexer.next()
   lexer.skip(TKSpaces)
-  result.add(Node(
-    kind: NKWord,
-    token: lexer.expect(TKWord)
-  ))
+
+  result.add(parseWord(lexer))
+
   lexer.next()
   lexer.skip(TKSpaces)
+
   discard lexer.expect(TKVariableSubEnd)
 
 
@@ -199,6 +206,8 @@ proc parseCommandSub(lexer: Lexer): Node =
   )
 
   lexer.next()
+  lexer.skip(TKSpaces)
+
   result.add(parseCommands(lexer))
 
 
@@ -208,16 +217,17 @@ proc parseRedirect(lexer: Lexer): Node =
     token: lexer.token
   )
 
+  lexer.next()
   lexer.skip(TKSpaces)
+
   let target = lexer.token
   case target.kind
-  of TKStringData, TKStringEscape:
-    result.add(Node(
-      kind: NKStringData,
-      token: lexer.token
-    ))
+  of TKWord:
+    result.add(parseWord(lexer))
+  of TKStringStart:
+    result.add(parseString(lexer))
   else:
-    raise newException(Exception, "239")
+    raise newException(Exception, fmt"parseRedirect: Unable to parse {target.kind}")
 
 
 proc nodeRepr*(node: Node, indent = 0) =
