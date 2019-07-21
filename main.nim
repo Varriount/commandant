@@ -1,4 +1,4 @@
-import commandant/[parser, lexer, treeutils, vm]
+import commandant/[vm, parser, lexer]
 import strformat, strutils
 import rdstdin
 
@@ -11,38 +11,32 @@ when defined(release):
   setControlCHook(handleQuit)
 
 
+# proc main() =
+#   var lexer = newLexer()
 
+#   var line = ""
+#   while true:
+#     # Print the prompt, then gather the AST from the parser
+#     let breakLoop = not readLineFromStdin("> ", line)
+#     if breakLoop:
+#       break
 
-proc main() =
-  proc getInput(vm: CommandantVm, output: var string): bool =
+#     # Strip whitespace
+#     line = line.strip()
+#     if line == "":
+#       continue
+
+#     # Parse the line
+#     lexer.resetLexer()
+#     lexer.lex(line)
+#     var nodes = parseCommands(lexer)
+#     nodeRepr(nodes)
+
+proc main =
+  proc getInput(vm: VM, output: var string): bool =
     result = readLineFromStdin("> ", output)
 
-  var vm = newCommandantVm(getInput)
+  var vm = newVm(getInput)
   vm.run()
-
-  # initParser(parser)
-
-  # var line = ""
-  # while true:
-  #   # Print the prompt, then gather the AST from the parser
-  #   let breakLoop = not readLineFromStdin("> ", line)
-  #   if breakLoop:
-  #     break
-
-  #   # Strip whitespace
-  #   line = line.strip()
-  #   if line == "":
-  #     continue
-
-  #   # Parse the line
-  #   var nodes = parse(parser, line)
-  #   if parser.errorFound:
-  #     parser.errorFound = false
-  #     continue
-
-  #   # Execute the line if no error was encountered during the parse.
-  #   # echo nodeRepr(nodes)
-  #   vm.execNode(nodes)
-      
 
 main()

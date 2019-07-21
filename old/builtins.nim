@@ -4,8 +4,8 @@
 ## a circular dependancy between the virtual machine type
 ## and the builtin routines.
 ## 
-import parseutils, sequtils, pegs, tables, strutils, strformat, os
-import parser, lexer
+import parser, lexer, tables, strutils, strformat, os
+import parseutils, sequtils, pegs
 
 import regex except Option
 # ## Builtin Implementations ## #
@@ -50,10 +50,10 @@ template addFmt(s: var string, value: static[string]) =
 
 # ### Flow-Control Commands ### #
 proc execDefine(
-    vm        : VM,
+    vm        : CommandantVm,
     executable: string,
     arguments : seq[string],
-    commands  : seq[Node],
+    commands  : seq[AstNode],
     cmdFiles  : CommandFiles): int =
   ## Define a function.
   ## Syntax:
@@ -79,10 +79,10 @@ proc execDefine(
 
 
 proc execIf(
-    vm        : VM,
+    vm        : CommandantVm,
     executable: string,
     arguments : seq[string],
-    commands  : seq[Node],
+    commands  : seq[AstNode],
     cmdFiles  : CommandFiles): int =
   # echo "here"
   ## Run a series of commands, based on whether a single command returns
@@ -110,10 +110,10 @@ proc execIf(
 
 
 proc execWhile(
-    vm        : VM,
+    vm        : CommandantVm,
     executable: string,
     arguments : seq[string],
-    commands  : seq[Node],
+    commands  : seq[AstNode],
     cmdFiles  : CommandFiles): int =
   ## Run a series of commands, while a single command returns 0
   ## Syntax:
@@ -142,10 +142,10 @@ proc execWhile(
 
 
 proc execFor(
-    vm        : VM,
+    vm        : CommandantVm,
     executable: string,
     arguments : seq[string],
-    commands  : seq[Node],
+    commands  : seq[AstNode],
     cmdFiles  : CommandFiles): int =
   ## Run a series of commands, once for each token output by a single command.
   ## Syntax:
@@ -177,7 +177,7 @@ proc execFor(
 
 # ### Utility Commands ### #
 proc execEcho(
-    vm        : VM,
+    vm        : CommandantVm,
     executable: string,
     arguments : seq[string],
     cmdFiles  : CommandFiles): int =
@@ -200,7 +200,7 @@ proc execEcho(
 
 # ### VM/Environment Variable Procedures ### #
 proc execSet(
-    vm        : VM,
+    vm        : CommandantVm,
     executable: string,
     arguments : seq[string],
     cmdFiles  : CommandFiles): int =
@@ -227,7 +227,7 @@ proc execSet(
 
 
 proc execUnset(
-    vm        : VM, 
+    vm        : CommandantVm, 
     executable: string,
     arguments : seq[string],
     cmdFiles  : CommandFiles): int =
@@ -253,7 +253,7 @@ proc execUnset(
 
 
 proc execExport(
-    vm        : VM,
+    vm        : CommandantVm,
     executable: string,
     arguments : seq[string],
     cmdFiles  : CommandFiles): int =
@@ -308,7 +308,7 @@ proc execExport(
 
 
 proc execUnexport(
-    vm        : VM,
+    vm        : CommandantVm,
     executable: string,
     arguments : seq[string],
     cmdFiles  : CommandFiles): int =
@@ -321,7 +321,7 @@ proc execUnexport(
 
 
 proc execState(
-    vm        : VM,
+    vm        : CommandantVm,
     executable: string,
     arguments : seq[string],
     cmdFiles  : CommandFiles): int =
@@ -362,15 +362,15 @@ proc execState(
 # ## Public Interface ## #
 type
   Statement = proc (
-    vm        : VM,
+    vm        : CommandantVm,
     executable: string,
     arguments : seq[string],
-    commands  : seq[Node],
+    commands  : seq[AstNode],
     cmdFiles  : CommandFiles
   ): int
 
   Builtin = proc (
-    vm        : VM,
+    vm        : CommandantVm,
     executable: string,
     arguments : seq[string],
     cmdFiles  : CommandFiles
@@ -410,7 +410,7 @@ proc getBuiltin(name: string): Option[Builtin] =
 
 
 # proc callBuiltin*(
-#     vm        : VM,
+#     vm        : CommandantVm,
 #     builtin   : BuiltinIdent,
 #     arguments : seq[string],
 #     cmdFiles  : CommandFiles) =
