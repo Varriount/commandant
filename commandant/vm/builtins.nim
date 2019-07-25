@@ -4,8 +4,9 @@
 ## a circular dependancy between the virtual machine type
 ## and the builtin routines.
 ## 
+{.experimental: "codeReordering".}
 import parseutils, sequtils, pegs, tables, strutils, strformat, os
-import parser, lexer
+import ".." / [parser, lexer]
 
 import regex except Option
 # ## Builtin Implementations ## #
@@ -16,25 +17,25 @@ template writeQuoted(outSym, s) =
 
 
 template writeOut(outputString) =
-  stdout.write(outputString)
+  pipes.output.writeEnd.write(outputString)
 
 
 template writeOutLn(outputString) =
-  stdout.write(outputString)
-  stdout.write("\n")
+  pipes.output.writeEnd.write(outputString)
+  pipes.output.writeEnd.write("\n")
 
 
 template writeErr(errorString) =
-  stderr.write(errorString)
+  pipes.errput.writeEnd.write(errorString)
 
 
 template writeErrLn(errorString) =
-  stderr.write(errorString)
-  stderr.write("\n")
+  pipes.errput.writeEnd.write(errorString)
+  pipes.errput.writeEnd.write("\n")
 
 
 template emitError(errorString) =
-  stderr.write(errorString)
+  pipes.errput.writeEnd.write(errorString)
   echo "\n"
   return 1
 
@@ -51,28 +52,27 @@ template addFmt(s: var string, value: static[string]) =
 # ### Flow-Control Commands ### #
 proc execDefine(
     vm        : VM,
-    executable: string,
     arguments : seq[string],
     commands  : seq[Node],
-    cmdFiles  : CommandFiles): int =
+    pipes     : CommandPipes): int =
   ## Define a function.
   ## Syntax:
-  ##       0               ^1
+  ##   0   1               2
   ##   def <function name> =
   ##      ...
   ##   end
   result = 0
 
   let valid = (
-    len(arguments) == 2 and
-    arguments[1] == "="
+    len(arguments) == 3 and
+    arguments[2] == "="
   )
   emitErrorIf(not valid):
     "Error: Expected an expression of the form 'def <function name> ='."
 
-  var name = arguments[0]
+  var name = arguments[1]
 
-  emitErrorIf(not validIdentifier(arguments[0])):
+  emitErrorIf(not validIdentifier(arguments[1])):
     fmt("Error: \"{name}\" is not a valid identifier.")
 
   vm.setFunc(name, commands)
@@ -80,83 +80,89 @@ proc execDefine(
 
 proc execIf(
     vm        : VM,
-    executable: string,
     arguments : seq[string],
     commands  : seq[Node],
-    cmdFiles  : CommandFiles): int =
-  # echo "here"
+    pipes     : CommandPipes): int =
   ## Run a series of commands, based on whether a single command returns
   ## success.
   ## Syntax:
-  ##      0   1      ^3 ^2  ^1
+  ##   0  1   2      ^3 ^2  ^1
   ##   if "(" <command> ")" then
   ##      ...
   ##   end
+  result = 0
+
   let valid = (
-    len(arguments) >= 3   and
-    arguments[0] == "("   and
+    len(arguments) >= 4   and
+    arguments[1] == "("   and
     arguments[^2] == ")"  and
     arguments[^1] == "then"
   )
   emitErrorIf(not valid):
     "Error: Expected an expression of the form 'if ( <command> ) then'."
 
-  let conditionCommand = arguments[1..^3]
+  let conditionCommand = arguments[2..^3]
+  var job = callCommand(vm, conditionCommand, pipes)
 
-  tryCallCommand(vm, conditionCommand, cmdFiles)
+  wait(vm, job)
   if vm.lastExitCode == "0":
     for command in commands:
-      execLine(vm, command)
+      job = execNode(vm, command, pipes)
+      wait(vm, job)
 
 
 proc execWhile(
     vm        : VM,
-    executable: string,
     arguments : seq[string],
     commands  : seq[Node],
-    cmdFiles  : CommandFiles): int =
+    pipes     : CommandPipes): int =
   ## Run a series of commands, while a single command returns 0
   ## Syntax:
-  ##         0   1      ^3 ^2  ^2
+  ##   0     1   2      ^3 ^2  ^1
   ##   while "(" <command> ")" do
   ##      ...
   ##   end
+  result = 0
+
   let valid = (
-    len(arguments) >= 4   and
-    arguments[0] == "("   and
+    len(arguments) >= 5   and
+    arguments[1] == "("   and
     arguments[^2] == ")"  and
     arguments[^1] == "do"
   )
   emitErrorIf(not valid):
     "Error: Expected an expression of the form 'while ( <command> ) do'."
 
-  let conditionCommand = arguments[1..^3]
+  let conditionCommand = arguments[2..^3]
 
   while true:
-    tryCallCommand(vm, conditionCommand, cmdFiles)
+    var job = callCommand(vm, conditionCommand, pipes)
+    wait(vm, job)
     if vm.lastExitCode != "0":
       break
 
     for command in commands:
-      execLine(vm, command)
+      var job = execNode(vm, command, pipes)
+      wait(vm, job)
 
 
 proc execFor(
     vm        : VM,
-    executable: string,
     arguments : seq[string],
     commands  : seq[Node],
-    cmdFiles  : CommandFiles): int =
+    pipes     : CommandPipes): int =
   ## Run a series of commands, once for each token output by a single command.
   ## Syntax:
-  ##       0       1  2   3      ^3 ^2  ^1
+  ##   0   1     2  3   4      ^3 ^2  ^1
   ##   for ident in "(" <command> ")" do =
   ##      ...
   ##   end
+  result = 0
+
   let valid = (
-    len(arguments) >= 6   and
-    arguments[1] == "in"   and
-    arguments[2] == "("   and
+    len(arguments) >= 7   and
+    arguments[2] == "in"   and
+    arguments[3] == "("   and
     arguments[^2] == ")"  and
     arguments[^1] == "do"
   )
@@ -164,8 +170,8 @@ proc execFor(
     "Error: Expected an expression of the form 'for <regex> in ( <command> ) do'."
 
   let
-    rawRegex = arguments[0]
-    command = arguments[3..^3]
+    rawRegex = arguments[1]
+    command = arguments[4..^3]
 
   var regex: Regex
   try:
@@ -178,19 +184,19 @@ proc execFor(
 # ### Utility Commands ### #
 proc execEcho(
     vm        : VM,
-    executable: string,
     arguments : seq[string],
-    cmdFiles  : CommandFiles): int =
-  ## Echo a variable.
+    pipes     : CommandPipes): int =
+  ## Set a variable.
   ## Syntax:
-  ##   set <x> = <y> ... <z>
+  ##  0    1        ^1
+  ##  echo <x> ... <z>
   result = 0
 
-  for i in 0..high(arguments):
+  for i in 1..high(arguments):
     writeOut(arguments[i])
     break
 
-  for i in 1..high(arguments):
+  for i in 2..high(arguments):
     writeOut(' ')
     writeOut(arguments[i])
   writeOut("\n")
@@ -201,12 +207,12 @@ proc execEcho(
 # ### VM/Environment Variable Procedures ### #
 proc execSet(
     vm        : VM,
-    executable: string,
     arguments : seq[string],
-    cmdFiles  : CommandFiles): int =
-  ## Set a variable.
+    pipes     : CommandPipes): int =
+  ## Echo a variable.
   ## Syntax:
-  ##  echo <x> ... <z>
+  ##   0   1   2 3        ^1
+  ##   set <x> = <y> ... <z>
   result = 0
 
   let valid = (
@@ -227,10 +233,9 @@ proc execSet(
 
 
 proc execUnset(
-    vm        : VM, 
-    executable: string,
+    vm        : VM,
     arguments : seq[string],
-    cmdFiles  : CommandFiles): int =
+    pipes     : CommandPipes): int =
   ## Unset a variable.
   ## Syntax:
   ##   unset <x> ... <z>
@@ -254,9 +259,8 @@ proc execUnset(
 
 proc execExport(
     vm        : VM,
-    executable: string,
     arguments : seq[string],
-    cmdFiles  : CommandFiles): int =
+    pipes     : CommandPipes): int =
   ## Export and set a variable.
   ## Syntax:
   ##   export x [ = <y> ... <z> ]
@@ -309,9 +313,8 @@ proc execExport(
 
 proc execUnexport(
     vm        : VM,
-    executable: string,
     arguments : seq[string],
-    cmdFiles  : CommandFiles): int =
+    pipes     : CommandPipes): int =
   ## Unexport a variable.
   ## Syntax:
   ##   unexport x
@@ -322,9 +325,8 @@ proc execUnexport(
 
 proc execState(
     vm        : VM,
-    executable: string,
     arguments : seq[string],
-    cmdFiles  : CommandFiles): int =
+    pipes     : CommandPipes): int =
   ## Print VM state.
   ## Syntax:
   ##   state <category> ...
@@ -363,17 +365,15 @@ proc execState(
 type
   Statement = proc (
     vm        : VM,
-    executable: string,
     arguments : seq[string],
     commands  : seq[Node],
-    cmdFiles  : CommandFiles
+    pipes     : CommandPipes
   ): int
 
   Builtin = proc (
     vm        : VM,
-    executable: string,
     arguments : seq[string],
-    cmdFiles  : CommandFiles
+    pipes     : CommandPipes
   ): int
 
 
@@ -385,11 +385,31 @@ const statementMap = {
 }
 
 
+proc isEndCommand(node: Node): bool =
+  result = (
+    node.kind == NKCommand  and
+    len(node.children) == 1 and
+    node.children[0].token.data == "end"
+  )
+
+
 proc getStatement(name: string): Option[Statement] =
   for pair in statementMap:
     let (statementName, statement) = pair
     if name == statementName:
       return some(Statement(statement))
+
+
+proc isStatement(node: Node): bool =
+  result = (
+    # Do we have a simple command?
+    node.kind == NKCommand and
+    len(node.children) > 0 and
+
+    # Is the first argument of the command a statement?
+    node.children[0].kind == NKWord and
+    isSome(getStatement(node.children[0].token.data))
+  )
 
 
 const builtinMap = {
@@ -407,24 +427,3 @@ proc getBuiltin(name: string): Option[Builtin] =
     let (builtinName, builtin) = pair
     if name == builtinName:
       return some(Builtin(builtin))
-
-
-# proc callBuiltin*(
-#     vm        : VM,
-#     builtin   : BuiltinIdent,
-#     arguments : seq[string],
-#     cmdFiles  : CommandFiles) =
-
-#   template execBuiltin(procname: untyped) =
-#     vm.lastExitCode = $procname(vm, arguments, cmdFiles)
-
-#   case builtin
-#   of biEcho    : execBuiltin(execEcho)
-#   of biSet     : execBuiltin(execSet)
-#   of biUnset   : execBuiltin(execUnset)
-#   of biExport  : execBuiltin(execExport)
-#   of biState   : execBuiltin(execState)
-#   of biUnexport: execBuiltin(execUnsetexport)
-#   of biUnknown:
-#     raise newException(ValueError, "Unknown builtin called.")
-

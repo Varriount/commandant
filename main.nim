@@ -1,6 +1,5 @@
-import commandant/[vm, parser, lexer]
-import strformat, strutils
-import rdstdin
+import strformat, strutils, rdstdin
+import commandant/[vm/vm, parser, lexer]
 
 when defined(release):
   # Handle CTRL-C

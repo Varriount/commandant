@@ -91,13 +91,18 @@ proc lex*(lexer: Lexer, input: string) =
     lexer.tokens[^1].data = capture[0].s
 
   let lexer = peg "COMMANDS":
-    COMMANDS <- COMMAND * *( SEPERATOR_LIT * COMMAND ) * (EndOfInput | &COMMAND_SUB_END_SYM)
+    COMMANDS <- (
+      COMMAND * 
+      *( SEPERATOR_LIT * (COMMAND | E_MISSING_COMMAND) ) * 
+      (EndOfInput | &COMMAND_SUB_END_SYM)
+    )
 
     EndOfInput <- >( EOF ):
       addMarkerToken(TKEof)
 
-    COMMAND <- +(
-      SPACES        |
+    COMMAND <- ?SPACES * COMMAND_PART * *( SPACES | COMMAND_PART )
+
+    COMMAND_PART <- (
       # Substitutions
       COMMAND_SUB   |
       VARIABLE_SUB  |
@@ -280,11 +285,12 @@ proc lex*(lexer: Lexer, input: string) =
       linePosition = capture[0].si
 
     # Errors
-    E_INVALID_SUB    <- E"Invalid substitution."
-    E_MISSING_CBRACE <- E"Missing curly brace."
-    E_MISSING_PAREN  <- E"Missing parenthesis."
-    E_MISSING_QUOTE  <- E"Missinq quotation mark."
-    E_MISSING_TARGET <- E"Missing redirection target."
+    E_INVALID_SUB     <- E"Invalid substitution."
+    E_MISSING_CBRACE  <- E"Missing curly brace."
+    E_MISSING_COMMAND <- E"Missing command."
+    E_MISSING_PAREN   <- E"Missing parenthesis."
+    E_MISSING_QUOTE   <- E"Missinq quotation mark."
+    E_MISSING_TARGET  <- E"Missing redirection target."
 
   let res = lexer.match(input)
   if res.matchLen != len(input):
