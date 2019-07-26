@@ -49,6 +49,43 @@ template addFmt(s: var string, value: static[string]) =
   s.add(fmt(value))
 
 
+template checkVarIdentifiers(vars) =
+  var invalidVars: seq[string]
+
+  # Identifier checks
+  for variable in vars:
+    if not validIdentifier(variable):
+      invalidTargets.add(variable)
+
+  emitErrorIf(len(invalidTargets) > 0):
+    fmt("Error: " & invalidTargets & " are not valid variable indentifier(s).")
+
+
+template checkExistingVars(vars) =
+  var invalidVars: seq[string]
+
+  # Identifier checks
+  for variable in vars:
+    if not validIdentifier(variable):
+      invalidVars.add(variable)
+
+  emitErrorIf(len(invalidVars) > 0):
+    "Error: " & invalidVars.join(" ") & " are not valid variable indentifier(s)."
+
+  # Value checks
+  for variable in vars:
+    if not hasVar(vm, variable):
+      invalidVars.add(variable)
+
+  emitErrorIf(len(invalidVars) > 0):
+    "Error: " & invalidVars.join(" ") & " are not set variables."
+
+
+template checkExpression(expressionString, valid) =
+  emitErrorIf(not valid):
+    fmt"Error: Expected an expression of the form " & expressionString & "."
+
+
 # ### Flow-Control Commands ### #
 proc execDefine(
     vm        : VM,
@@ -61,18 +98,16 @@ proc execDefine(
   ##   def <function name> =
   ##      ...
   ##   end
-  result = 0
 
-  let valid = (
+  checkExpression(
+    "def <function name> =",
     len(arguments) == 3 and
-    arguments[2] == "="
+    arguments[2] == "=",
   )
-  emitErrorIf(not valid):
-    "Error: Expected an expression of the form 'def <function name> ='."
 
-  var name = arguments[1]
+  let name = arguments[1]
 
-  emitErrorIf(not validIdentifier(arguments[1])):
+  emitErrorIf(not validIdentifier(name)):
     fmt("Error: \"{name}\" is not a valid identifier.")
 
   vm.setFunc(name, commands)
@@ -90,16 +125,14 @@ proc execIf(
   ##   if "(" <command> ")" then
   ##      ...
   ##   end
-  result = 0
 
-  let valid = (
+  checkExpression(
+    "if ( <command> ) then",
     len(arguments) >= 4   and
     arguments[1] == "("   and
     arguments[^2] == ")"  and
     arguments[^1] == "then"
   )
-  emitErrorIf(not valid):
-    "Error: Expected an expression of the form 'if ( <command> ) then'."
 
   let conditionCommand = arguments[2..^3]
   var job = callCommand(vm, conditionCommand, pipes)
@@ -122,16 +155,14 @@ proc execWhile(
   ##   while "(" <command> ")" do
   ##      ...
   ##   end
-  result = 0
 
-  let valid = (
+  checkExpression(
+    "while ( <command> ) do",
     len(arguments) >= 5   and
     arguments[1] == "("   and
     arguments[^2] == ")"  and
     arguments[^1] == "do"
   )
-  emitErrorIf(not valid):
-    "Error: Expected an expression of the form 'while ( <command> ) do'."
 
   let conditionCommand = arguments[2..^3]
 
@@ -146,41 +177,6 @@ proc execWhile(
       wait(vm, job)
 
 
-proc execFor(
-    vm        : VM,
-    arguments : seq[string],
-    commands  : seq[Node],
-    pipes     : CommandPipes): int =
-  ## Run a series of commands, once for each token output by a single command.
-  ## Syntax:
-  ##   0   1     2  3   4      ^3 ^2  ^1
-  ##   for ident in "(" <command> ")" do =
-  ##      ...
-  ##   end
-  result = 0
-
-  let valid = (
-    len(arguments) >= 7   and
-    arguments[2] == "in"   and
-    arguments[3] == "("   and
-    arguments[^2] == ")"  and
-    arguments[^1] == "do"
-  )
-  emitErrorIf(not valid):
-    "Error: Expected an expression of the form 'for <regex> in ( <command> ) do'."
-
-  let
-    rawRegex = arguments[1]
-    command = arguments[4..^3]
-
-  var regex: Regex
-  try:
-    regex = toPattern(rawRegex)
-  except RegexError:
-    emitError:
-      fmt"Regex Error: {getCurrentException().msg}"
-
-
 # ### Utility Commands ### #
 proc execEcho(
     vm        : VM,
@@ -190,7 +186,6 @@ proc execEcho(
   ## Syntax:
   ##  0    1        ^1
   ##  echo <x> ... <z>
-  result = 0
 
   for i in 1..high(arguments):
     writeOut(arguments[i])
@@ -201,7 +196,6 @@ proc execEcho(
     writeOut(arguments[i])
   writeOut("\n")
 
-  result = 0
 
 
 # ### VM/Environment Variable Procedures ### #
@@ -213,18 +207,16 @@ proc execSet(
   ## Syntax:
   ##   0   1   2 3        ^1
   ##   set <x> = <y> ... <z>
-  result = 0
 
-  let valid = (
+  checkExpression(
+    "<x> = <y> [... <z>]",
     len(arguments) >= 3 and
-    arguments[1] == "="
+    arguments[2] == "="
   )
-  emitErrorIf(not valid):
-    "Error: Expected an expression of the form '<x> = <y> [... <z>]'."
 
   let 
-    target = arguments[0]
-    values = arguments[2..^1]
+    target = arguments[1]
+    values = arguments[3..^1]
 
   emitErrorIf(not validIdentifier(target)):
     fmt("Error: \"{target}\" is not a valid identifier.")
@@ -238,22 +230,17 @@ proc execUnset(
     pipes     : CommandPipes): int =
   ## Unset a variable.
   ## Syntax:
+  ##   0     1       ^1
   ##   unset <x> ... <z>
-  result = 0
 
-  emitErrorIf(len(arguments) > 0):
-    "Error: Expected an expression of the form '<x> [<y> ... <z>]'."
+  checkExpression(
+    "<x> [<y> ... <z>]",
+    len(arguments) >= 2
+  )
 
-  var errored = true
-  for arg in arguments:
-    if not validIdentifier(arg):
-      writeErr("Error: {arg} is not a valid variable name.\n")
-      errored = false
+  checkExistingVars(arguments[1..^1])
 
-  if errored:
-    return 1
-
-  for arg in arguments:
+  for arg in arguments[1..^1]:
     vm.delVar(arg)
 
 
@@ -263,23 +250,25 @@ proc execExport(
     pipes     : CommandPipes): int =
   ## Export and set a variable.
   ## Syntax:
+  ##   0      1   2 3       ^1
   ##   export x [ = <y> ... <z> ]
-  result = 0
 
   let 
-    exportMultiple = (len(arguments) > 0)
+    exportMultiple = (len(arguments) > 1)
     exportAndSet = (
       len(arguments) >= 3 and
       arguments[1] == "="
     )
 
-  emitErrorIf(not (exportMultiple or exportAndSet)):
-    "Error: Expected an expression of the form '<x> [ = <y> ... <z>]'."
+  checkExpression(
+    "<x> [ = <y> ... <z>]",
+    (exportMultiple or exportAndSet)
+  )
 
   if exportAndSet:
     let
-      target = arguments[0]
-      values = arguments[2..^1]
+      target = arguments[1]
+      values = arguments[3..^1]
     
     emitErrorIf(not validIdentifier(target)):
       fmt("Error: \"{target}\" is not a valid identifier.")
@@ -288,25 +277,10 @@ proc execExport(
     putEnv(target, join(values, " "))
   
   else: # exportMultiple
-    var invalidTargets = newSeq[string]()
-    # Identifier checks
-    for target in arguments:
-      if not validIdentifier(target):
-        invalidTargets.add(target)
-
-    emitErrorIf(len(invalidTargets) > 0):
-      fmt("Error: {invalidTargets} are not valid indentifier(s).")
-
-    # Value checks
-    for target in arguments:
-      if not vm.hasVar(target):
-        invalidTargets.add(target)
-
-    emitErrorIf(len(invalidTargets) > 0):
-      fmt("Error: {invalidTargets} are not set variables.")
+    checkExistingVars(arguments[1..^1])
 
     # Export
-    for target in arguments:
+    for target in arguments[1..^1]:
       let values = vm.getVar(target).get()
       os.putEnv(target, join(values, " "))
 
@@ -317,48 +291,103 @@ proc execUnexport(
     pipes     : CommandPipes): int =
   ## Unexport a variable.
   ## Syntax:
-  ##   unexport x
-  result = 0
+  ##   0        1  ^1
+  ##   unexport x [<y>...]
 
   discard
 
 
-proc execState(
+proc execDelete(
     vm        : VM,
     arguments : seq[string],
     pipes     : CommandPipes): int =
-  ## Print VM state.
+  ## Delete an element or subrange of elements from a variable.
+  ## 
+  ## If the given index or range doesn't exist, the variable will remain 
+  ## unchanged. If only part of a given range exists, that part will be 
+  ## removed.
+  ## 
   ## Syntax:
-  ##   state <category> ...
-  result = 0
+  ##   0      1   ^2   ^1 
+  ##   delete <x> from <z>
+  checkExpression(
+    "delete <x> from <z>",
+    len(arguments) >= 4 and
+    arguments[^2] == "from"
+  )
+  checkExistingVars(arguments[^1..^1])
 
-  const
-    listStart = "["
-    listEnd   = "]"
-    listSep   = ", "
+  var deletionPoint = 0
+  try:
+    deletionPoint = parseInt(arguments[1])
+  except:
+    emitError("Invalid index " & arguments[1])
   
-  # Variables
-  # writeOutLn("Variables:")
-  # for key, values in vm.variables:
-  #   writeOut(fmt("    \"{key}\": "))
-  #   writeOut(listStart)
+  var variable = get(vm.getVar(arguments[^1]))
+  if deletionPoint >= 0 and deletionPoint <= high(arguments):
+    variable.delete(deletionPoint)
+    vm.setVar(arguments[^1], variable)
 
-  #   for i in 0..high(values):
-  #     writeQuoted(writeOut, values[i])
-  #     break
 
-  #   for i in 1..high(values):
-  #     writeOut(listSep)
-  #     writeQuoted(writeOut, values[i])
-      
-  #   writeOutLn(listEnd)
+proc execInsert(
+    vm        : VM,
+    arguments : seq[string],
+    pipes     : CommandPipes): int =
+  ## Insert an element into a variable.
+  ## Syntax:
+  ##   0      1    ^5      ^4   ^3  ^2 ^1 
+  ##   insert <w> [<x>...] into <y> at <z>
+  # Command structure check
+  checkExpression(
+    "insert <w> [<x>...] into <y> at <z>",
+    len(arguments) >= 6 and
+    arguments[^4] == "into" and
+    arguments[^2] == "at"
+  )
+
+  # Identifier checks
+  checkExistingVars(arguments[^3..^3])
+
+  # Logic
+  let name = arguments[^3]
+  var insertionPoint = 0
+  try:
+    insertionPoint = parseInt(arguments[^1])
+  except:
+    emitError("Invalid index " & arguments[^1])
+
+  var variable = get(vm.getVar(name))
+
+  insert(variable, arguments[1..^5], insertionPoint)
+  vm.setVar(name, variable)
+
+
+proc execAdd(
+    vm        : VM,
+    arguments : seq[string],
+    pipes     : CommandPipes): int =
+  ## Add an element to a variable.
+  ## Syntax:
+  ##   0   1    ^3      ^2 ^1 
+  ##   add <x> [<y>...] to <z>
+  # Command structure check
+  checkExpression(
+    "add <x> [<y>...] to <z>",
+    len(arguments) >= 4 and
+    arguments[^2] == "to"
+  )
+
+  # Identifier checks
+  checkExistingVars(arguments[^1..^1])
+
+  # Logic
+  let name = arguments[^1]
+  var variable = get(vm.getVar(name))
   
-  # # Functions
-  # writeOutLn("Functions:")
-  # for key, values in vm.functions:
-  #   writeOutLn(fmt("    \"{key}\": "))
-  #   for value in values:
-  #     writeOutLn(fmt"      {value}")
+  for value in arguments[1..^3]:
+    variable.add(value)
+
+  vm.setVar(name, variable)
 
 
 # ## Public Interface ## #
@@ -380,7 +409,6 @@ type
 const statementMap = {
   "if"   : execIf,
   "while": execWhile,
-  "for"  : execFor,
   "def"  : execDefine,
 }
 
@@ -417,8 +445,9 @@ const builtinMap = {
   "set"     : execSet,
   "unset"   : execUnset,
   "export"  : execExport,
-  "unexport": execUnexport,
-  "state"   : execState,
+  "add"     : execAdd,
+  "delete"  : execDelete,
+  "insert"  : execInsert,
 }
 
 

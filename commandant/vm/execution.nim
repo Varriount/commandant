@@ -157,6 +157,9 @@ proc execCommand(vm: VM, node: Node, pipes: CommandPipes): Job =
     of NKVariableSub:
       for piece in resolveVariableSub(vm, child, pipes):
         arguments[^1].add(piece)
+        arguments.add("")
+      if unlinked:
+        arguments.setLen(high(arguments))
 
       if removeIfEmpty and arguments[^1] == "":
         arguments.setLen(high(arguments))
