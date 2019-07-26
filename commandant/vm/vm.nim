@@ -163,9 +163,6 @@ proc tryCallFunction(
     job       : var Job): bool
 
 proc callCommand(vm: VM, arguments: seq[string], pipes: CommandPipes): Job =
-  # Is the command a function?
-  # Is it a builtin?
-  # It must be a native executable.
   let valid = (
     tryCallFunction(vm, arguments, pipes, result) or 
     tryCallBuiltin(vm, arguments, pipes, result)  or 
@@ -213,6 +210,7 @@ proc tryCallFunction(
     variables: initTable[string, seq[string]](),
     functions: initTable[string, seq[Node]]()
   )
+  functionFrame.variables["args"] = arguments
 
   add(vm.callStack, functionFrame)
   while not functionFrame.finished:

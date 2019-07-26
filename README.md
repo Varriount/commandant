@@ -1,10 +1,11 @@
 # commandant #
 A command-oriented command shell
 
-# Motivation
+
+## Motivation ##
 The commandant shell language was designed based on this stream of reasoning:
-  - Other shell languages, while powerful, often have useful capabilities hidden
-    behind odd or obscure syntax.
+  - Other shell languages, while powerful, often have useful capabilities
+    hidden behind odd or obscure syntax.
   - Thus, a better shell language might be one where all the capabilities of
     the language are expressed through a familier, often used construct.
   - Since the most often used language construct in a command shell is a
@@ -14,98 +15,213 @@ The commandant shell language was designed based on this stream of reasoning:
     instead.
 
 
-# Language
-In the context of this document, a "command" is defined as a string of arguments
-separated by whitespace characters. Each argument is either a string (a run of
-characters surrounded by double-quotes) or a word (any other run of
-non-whitespace characters). Words may be further specialized into either
-separators, which chain commands, and redirections, which modify the standard
-IO streams an invoked command uses.
+## Language ##
+In the context of this document, a "command" is defined as a string of 
+arguments separated by whitespace characters. 
 
-Commandant's lexical pass is fairly simple, using the following PEG grammer:
-```
-token            <- strToken / seperator / redirection / word
-wordToken        <- [A-Za-z0-9_]+
-strToken         <- ('"' (BACKSLASH . / [^'"'])* '"')
-separatorToken   <- ";" / "&&" / "||"
-redirectionToken <- ">" | ">>" | "!>" | "!>>" | "<"
-```
+Each argument in a command falls into one of six categories:
 
-The parsing grammer is also simple:
-```
-start        <- multicommand / command
-multicommand <- command separatorToken command
-redirection  <- redirectionToken ( wordToken / stringToken )
-command      <- ( redirection / wordToken )+
-```
+  - **Redirection Expression**  
+    An expression consisting of a redirection operator, followed by a string or
+    word describing the file to use for the redirection.  
+    *Example*:
+      ```
+      echo hello world > "output.log"
+      ```
+    Available output operators:
+    - `< `: Redirect standard input to the given file.
+    - `> `: Redirect standard output to the given file.
+            Creates the file if it doesn't exist, otherwise the file is
+            truncated upon opening.
+    - `>>`: Redirect standard input to the given file.
+            Creates the file if it doesn't exist, however if the file already
+            exists, it is appended to.
+    - `!>`: The same as `>`, however standard error is redirected, rather than
+            standard output.
+    - `!>>`: The same as `>>`, however standard error is redirected, rather
+             than standard output.
+    - `&>`: The same as `>`, however both standard output and standard error
+            are redirected.
+    - `&>>`: The same as `>>`, however both standard output and standard error
+             are redirected.
 
-Note that this grammer doesn't define language elements such as conditionals,
-variable setting, and control-flow constructs. The VM handles these contructs
-itself, using a series of built-in command handlers.
+  - **Variable Substitution**  
+    A word surrounded by a pair of double-nested square braces. May occur both
+    alone and inside a string.
+
+    The data associated with the variable named inside the square brackets will
+    be retrieved. If the variable substitution occurs alone, each element of
+    the variable's data will then be inserted as a seperate argument into the
+    surrounding command. If the variable substitution occurs within a string,
+    each element of the variable's data will be joined by a space, then
+    inserted directly into the string's text.
+
+    *Example*:
+      ```
+      echo [[variable_containing_hello_world]]
+      echo hello "[[variable_containing_world]]"
+      ```
+
+  - **Command Substitution**  
+    A command surrounded by a pair doubly-nested parenthesis. May occur both
+    alone and inside a string.
+
+    The command within the parenthesis will be run and the output captured. If
+    the command substitution occurs alone, the output will be split into
+    arguments as if the output had been directly written as part of the 
+    command.
+    If the command substitution occurs within a string, the output will be
+    directly inserted into the string's text.
+
+    *Example*: 
+      ```
+      echo ((echo hello world))
+      echo hello "((echo world))"
+      ```
+
+  - **String**  
+    A consecutive run of characters surrounded by a pair of either 
+    single-quotes or double-quotes. 
+
+    *Example*:
+      ```
+      echo hello world > "output.log"
+      ```
+
+  - **Word**  
+    A run of characters that are not spaces, nor command substitions, variables
+    substitutions, or strings.
+
+    *Example*:
+      ```
+      echo hello world
+      ```
+
+Note that the lexical and parsing phases do not define language elements such
+as `if`, statements, function definitions, etc. This is because such elements
+are defined as built-in commands, rather than specific syntactic structures.
 
 
-# The VM #
+## VM ##
 
-## Builtins ##
-Commandant has two kinds of built-in commands, intrinsic commands and statements.
+### Builtins ###
+Commandant has two kinds of built-in commands: intrinsic commands and statement
+commands.
 Each kind of built-in command is implemented as a function that the VM calls
 when the first argument of an input matches the built-in command's name.
 
 
 #### Intrinsic Commands ####
-Intrinsic commands behave almost exactly like normally invoked commands.
-Intrinsic Commands receive approximately the same amount of information when
-invoked, along with a reference to the virtual machine. 
+Intrinsic commands behave almost exactly like normally invoked commands, with
+the exception that they can directly read and modify the shell state.
 
-A command builtin function recieves the following pieces of data:
+An intrinsic command recieves the following pieces of data:
   - A reference to the VM that invoked the command.
-  - The "executable" of the command, which is the first word or string token
-    parsed on the line.
-  - The other arguments that were invoked with the command.
-  - The streams that the command is using for standard IO.
+  - The list of arguments that were used to invoke the command (including the
+    name of the command itself).
+  - The input/output/error streams.
 
-Examples of command builtins include "set", to set a variable, and "export", to
-export a variable into the environment of invoked commands.
+Commandant currently has the following intrinsic commands:
+
+  - **Echo**  
+    Echo arguments.
+    
+    Syntax: `echo [<x>...]`
+
+  - **Set**  
+    Set a variable's value.
+    
+    Syntax: `set <x> = <y> ... <z>`
+
+  - **Unset**  
+    Unset a variable.
+    
+    Syntax: `unset <x> ... <z>`
+
+  - **Export**  
+    Export and set a variable.
+    
+    Syntax: `export x [ = <y> ... <z> ]`
+
+  - **Unexport**  
+    Unexport a variable.
+    
+    Syntax: `unexport x`
+    
+  - **Delete**  
+    Delete an element from a variable.
+    If the given index doesn't exist, the variable will remain 
+    unchanged.
+    
+    Syntax: `delete <x> from <z>`
+    
+  - **Insert**  
+    Insert an element into a variable.
+    
+    Syntax: `insert <x> into <y> at <z>`
+    
+  - **Add**  
+    Add an element to a variable.
+    
+    Syntax: `add <x> to <y>`
+
   
 #### Statement Commands ####
 Statement commands are used for language constructs that are represented as
-"blocks" of commands. They typically start with some form of prelude command,
-contain a number of arbitrary commands, then end with the "end" command.
-Statements may be nested, and in some cases (such as functions) the body of a
-statement may be stored in the VM rather than run immediately.
+"blocks" of commands. They are comprised of three parts: a prelude command 
+(such as `if x then`) a body containing a number of arbitrary commands, and an 
+"end" command Statements may be nested, and in some cases (such as functions) 
+the body of  statement may be stored for later use rather than run immediately.
 
 Due to these constraints, the VM must be able to determine the start and end of
 the statement without evaluating it's block of commands. This means that
 statement commands may not be chained with other commands.
 
-Statement builtins are used to implement "if" and "while" statements, as well
-as functions.
+Statement commands receive the same pieces of data as intrinsic commands, plus 
+a list of commands that make up the statement command's "body".
+
+Commandant currently has the following statement commands:
+
+  - **If**  
+    Conditionally execute a block of commands.
+    
+    Syntax: `if [<x>...] then`
+
+  - **While**  
+    Repeatedly execute a block of commands while a particular command is true.
+    
+    Syntax: `while [<x>...]`
+
+  - **Define**  
+    Define a function.
+    
+    Syntax: `define [<x>...] =`
 
 
-# Functions #
+### Functions ###
 The VM currently has basic support for functions. Functions act like commands -
 they recieve a list of arguments, have a set of IO streams, and return an exit
 code.
+Function arguments are stored in a local `args` variable, and the exit code of 
+a function is the exit code of its last command.
 
 Internally, function definitions are stored as an array of abstract syntax
 tree nodes, with each node in the array representing a command. A hash map then
 maps strings (function names) to this array. To support execution of functions,
 the VM maintains a dynamically-sized array of frame objects, with each frame
 object containing the information required to execute a function, such as the
-instruction pointer, the map of local variables, etc.
+instruction pointer, the map of local variables, etc. 
 
 
-# Variables #
-Commandant variables are arrays of strings, rather than just strings.
-They can be set using the "set" command.
+## Version 2 Changes ##
+As of version 2, nearly all of Commandants core logic has been rewritten. NPeg 
+library is now used to tokenize input in the lexer, and the parsing logic has 
+been greatly expanded to support new language constructs. Process creation now 
+makes use of posix_spawn, rather than `execCommand` from the standard library. 
+As a consequence of this, process input/output/error stream handling is much 
+improved.
 
-Variable substitution is performed by using the expressions `$var` or
-`$var[index]`. Using `$var` will concatenate all the elements in the array before
-substitution, while $var[x] will substitute only that element.
-
-
-# Notes: #
-
+## Notes:
 This project was mainly about learning how command shells ran. I learned quite
 a bit about parsers (such as the different methods for implementing operator
 precedence) as well as how bash works internally. Some of the key implementation
