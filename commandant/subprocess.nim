@@ -1,4 +1,4 @@
-import os, osproc, posix, strformat, sequtils, typetraits
+import os, posix, strformat
 import utils
 
 
@@ -27,7 +27,7 @@ proc `$`(pipeEnd: PipeEnd): string {.borrow.}
 proc read(a1: PipeEnd; a2: pointer; a3: int): int {.borrow.}
 
 
-proc read*(pipeEnd: PipeEnd; result: var string) =
+iterator read*(pipeEnd: PipeEnd): char =
   const BufferLength = 128
   var buffer: array[BufferLength, char]
 
@@ -44,7 +44,16 @@ proc read*(pipeEnd: PipeEnd; result: var string) =
       raiseOSError(osLastError())
 
     for i in 0..(readCount - 1):
-      result.add(buffer[i])
+      yield buffer[i]
+
+
+proc write*(pipeEnd: PipeEnd, buffer: openarray[char]) =
+  if len(buffer) > 0:
+    discard write(FileHandle(pipeEnd), unsafeAddr buffer[0], len(buffer))
+
+
+proc write*(pipeEnd: PipeEnd, c: char) =
+  discard write(FileHandle(pipeEnd), unsafeAddr c, 1)
 
 
 proc close*(pipeEnd: var PipeEnd) =
@@ -197,6 +206,7 @@ proc spawnProcess*(commandLine: openarray[string], pipes: CommandPipes): Pid =
   defer: deallocCStringArray(arguments)
 
   # Spawn the process
+  # echo fmt"Spawning {command}"
   let res = posixSpawnP(
     result,           # PID
     command,          # Command
@@ -206,7 +216,4 @@ proc spawnProcess*(commandLine: openarray[string], pipes: CommandPipes): Pid =
     environ           # Environment variables
   )
   if res != 0'i32:
-    raiseOSError(
-      osLastError(),
-      "Unable to spawn subprocess. OS Error: " & $strerror(res)
-    )
+    raiseOSError(OSErrorCode(res))

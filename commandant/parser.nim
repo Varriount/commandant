@@ -12,12 +12,14 @@ type
     NKStringData
     NKCommandSub
     NKVariableSub
+    NKStatement
+    NKBody
     NKEof
 
   Node* = object
     token*: Token
     unlinked*: bool
-
+    
     case kind*: NodeKind
     of NKWord, NKStringData:
       discard
@@ -29,41 +31,7 @@ proc add(parent: var Node, child: Node) =
   parent.children.add(child)
 
 
-#[
-proc parseExample(lexer: Lexer): Node =
-  result = Node(kind: RootKind)
-
-  while lexer.hasNext():
-    let token = lexer.token()
-
-    case token.kind
-    of TKSpaces:
-      discard
-    of TKWord:
-      discard
-    of TKStringStart:
-      discard
-    of TKStringEnd:
-      discard
-    of TKStringData:
-      discard
-    of TKStringEscape:
-      discard
-    of TKCommandSubStart:
-      discard
-    of TKCommandSubEnd:
-      discard
-    of TKVariableSubStart:
-      discard
-    of TKVariableSubEnd:
-      discard
-    of TKInvalid:
-      discard
-    else:
-      raise Exception()
-
-    lexer.next()
-]#
+# ## Parsing Procedures ## #
 proc parseCommands*(lexer: Lexer, precedenceLimit: int = 0): Node
 proc parseCommand(lexer: Lexer): Node
 proc parseString(lexer: Lexer): Node
@@ -71,6 +39,14 @@ proc parseVariableSub(lexer: Lexer): Node
 proc parseCommandSub(lexer: Lexer): Node
 proc parseRedirect(lexer: Lexer): Node
 proc parseWord(lexer: Lexer): Node
+
+
+proc unexpectedToken(t: Token) =
+  raise newException(
+    Exception,
+    fmt"""Unexpected token of kind {t.kind}: "{t.data}" at """ &
+    fmt"""line {t.loc.line}, column {t.loc.column}"""
+  )
 
 
 proc parse*(lexer: Lexer, data: string): Node =
@@ -137,7 +113,7 @@ proc parseCommand(lexer: Lexer): Node =
       result.add(parseRedirect(lexer))
 
     else:
-      raise newException(Exception, $token.kind)
+      unexpectedToken(token)
 
     lexer.next()
 
@@ -170,7 +146,7 @@ proc parseString(lexer: Lexer): Node =
       result.add(parseVariableSub(lexer))
 
     else:
-      raise newException(Exception, "118")
+      unexpectedToken(token)
 
     lexer.next()
 
@@ -220,14 +196,14 @@ proc parseRedirect(lexer: Lexer): Node =
   lexer.next()
   lexer.skip(TKSpaces)
 
-  let target = lexer.token
-  case target.kind
+  let token = lexer.token
+  case token.kind
   of TKWord:
     result.add(parseWord(lexer))
   of TKStringStart:
     result.add(parseString(lexer))
   else:
-    raise newException(Exception, fmt"parseRedirect: Unable to parse {target.kind}")
+    unexpectedToken(token)
 
 
 proc nodeRepr*(node: Node, indent = 0) =
