@@ -1,6 +1,13 @@
 # commandant #
 A command-oriented command shell
 
+Note: This was mainly created for learning purposes. I wanted to see how far
+I could go with the "everything is a command" approach.
+
+If you have questions about the implementation, want to improve it, etc., 
+feel free to either submit an issue, or contact me on the [Gitter/IRC/Discord
+Nim community](https://github.com/nim-lang/Nim#community)
+
 
 ## Motivation ##
 The commandant shell language was designed based on this stream of reasoning:
